@@ -173,12 +173,25 @@
     var top = r.tvl_usd;
     return '<div class="wf">' + steps.map(function (s) {
       return '<div>' + esc(s[0]) + '</div><div class="t"><span class="' + s[2] + '" style="width:' + Math.max(0.6, Math.sqrt(s[1] / top) * 100).toFixed(1) + '%"></span></div><div class="x">' + money(s[1]) + '</div>';
-    }).join('') + '</div><div class="note">Bars on a square-root scale. Each factor is computed from this protocol\'s own record; the category multiple comes from ' + plural(catInfo(r.category).comps || 0, 'trading comp') + ' in ' + esc(r.category || 'Uncategorised') + ', shrunk toward ' + mult(R.calibration.global_multiple) + '.</div>';
+    }).join('') + '</div><div class="note">Bars on a square-root scale. Each factor is computed from this protocol\'s own record; the category multiple comes from ' + plural(catInfo(r.category).comps || 0, 'trading comp') + ' in ' + esc(r.category || 'Uncategorised') + ', shrunk toward the ' + esc(famInfo(catInfo(r.category).family).family) + ' family at ' + mult(famInfo(catInfo(r.category).family).multiple) + ' (' + plural(famInfo(catInfo(r.category).family).comps, 'comp') + '), itself shrunk toward all comps at ' + mult(R.calibration.global_multiple) + '.</div>';
+  }
+  function compsOf(r) {
+    var k = r.category || 'Uncategorised';
+    var cs = R.comps.filter(function (c) { return c.category === k; }).slice(0, 5);
+    if (!cs.length) return '<div class="note">No token in ' + esc(k) + ' trades with a market cap in this snapshot, so the all-comps multiple ' + mult(R.calibration.global_multiple) + ' is used.</div>';
+    return '<table class="mini"><thead><tr><th>Comp in ' + esc(k) + '</th><th class="r">TVL</th><th class="r">Mcap</th><th class="r">×TVL</th></tr></thead><tbody>' + cs.map(function (c) {
+      return '<tr><td>' + esc(c.name) + ' <span class="sub">' + esc(c.symbol || '') + '</span></td><td class="r num">' + money(c.tvl_usd) + '</td><td class="r num">' + money(c.mcap_usd) + '</td><td class="r num">' + c.ratio.toFixed(3) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  }
+  function famInfo(f) {
+    var fs = R.calibration.families;
+    for (var i = 0; i < fs.length; i++) if (fs[i].family === f) return fs[i];
+    return { family: 'Other', comps: 0, multiple: R.calibration.global_multiple };
   }
   function catInfo(c) {
     var k = c || 'Uncategorised';
     for (var i = 0; i < R.calibration.categories.length; i++) if (R.calibration.categories[i].category === k) return R.calibration.categories[i];
-    return { comps: 0, raw: null, multiple: R.calibration.global_multiple };
+    return { comps: 0, raw: null, family: 'Other', multiple: R.calibration.global_multiple };
   }
   function detail(r) {
     var p = r.plan, n = net(r), ev = r.est_per_1k_usd * p.ticketUsd / 1000;
@@ -192,6 +205,7 @@
       fact('TVL', money(r.tvl_usd)) + fact('7-day change', pct(r.change_7d)) + fact('Tokenless for', days(r.tokenless_days)) +
       fact('Value ÷ TVL', mult(r.implied_value_usd / r.tvl_usd)) + fact('Drop / $1k · 90d', '$' + r.est_per_1k_usd.toFixed(2)) + fact('Farm chain', esc(p.chain)) + '</div>' +
       '<h3>How the value is built</h3>' + waterfall(r) +
+      compsOf(r) +
       '<h3>Farm plan · ' + money(p.ticketUsd) + ' ticket · ~$' + p.costUsd.toFixed(2) + ' fees · ~' + p.hours + ' h of work</h3>' +
       '<ol class="steps">' + p.steps.map(function (s) {
         return '<li><div>' + esc(s.do) + '</div><div class="tags"><span class="tag c">cost ' + esc(s.cost) + '</span><span class="tag t">time ' + esc(s.time) + '</span></div></li>';
@@ -245,19 +259,20 @@
     var K = R.constants, C = R.calibration;
     var cats = C.categories.slice().sort(function (a, b) { return b.comps - a.comps || a.category.localeCompare(b.category); });
     app.innerHTML = '<div class="prose">' +
-      '<p>What would each protocol\'s token be worth if its record stayed exactly as the snapshot shows it? The model prices it against the snapshot\'s own ' + C.comps + ' protocols whose token trades with a market cap. No protocol is named in the code; every number below is recomputed from the snapshot on each run.</p>' +
+      '<p>What would each protocol\'s token be worth if its record stayed exactly as the snapshot shows it? The model prices it against the snapshot\'s own ' + C.comps + ' trading tokens: one comp per token, its market cap over the summed TVL of every product that carries it, leaving out tokens whose main product is a CEX, a bridge, a staking wrapper or a versioned fork. No protocol is named in the code; every number below is recomputed from the snapshot on each run.</p>' +
       '<div class="formula">implied = TVL × category multiple × size × momentum × runway × class<br>' +
-      'category multiple = exp( (Σ ln(mcap/TVL) of comps in category + ' + K.PRIOR_WEIGHT + ' × mean ln) / (n + ' + K.PRIOR_WEIGHT + ') ), all comps: ' + mult(C.global_multiple) + '<br>' +
+      'category multiple = exp( (Σ ln(mcap/TVL) of its comps + ' + K.PRIOR_WEIGHT + ' × family ln) / (n + ' + K.PRIOR_WEIGHT + ') ); family = the same toward all comps (' + mult(C.global_multiple) + ')<br>' +
+      'families: ' + C.families.map(function (f) { return esc(f.family) + ' ' + mult(f.multiple) + ' (' + f.comps + ')'; }).join(' · ') + '<br>' +
       'size = (TVL / ' + money(C.centre_tvl) + ')^' + C.slope + ' (least-squares fit on comps, ' + C.slope_raw + ' before clamping), kept in [' + K.SIZE_MIN + ', ' + K.SIZE_MAX + ']<br>' +
       'momentum = (1 + clamp(change_7d, ' + K.GROWTH_FLOOR + '%, +' + K.GROWTH_CAP + '%))^' + K.GROWTH_ELASTICITY + '<br>' +
       'runway = ' + K.RUNWAY_FLOOR + ' + ' + K.RUNWAY_RANGE + ' × (1 − e^(−days tokenless / ' + K.RUNWAY_TAU_DAYS + ')), unknown age: ' + C.unknown_age_days + ' d (median)<br>' +
       'class = 1 watchlist or early · ' + K.PARENTED_FACTOR + ' above floor but parented · ' + K.DERIVATIVE_FACTOR + ' derivative (set aside)<br>' +
       'drop per $1k = implied × ' + K.AIRDROP_SHARE + ' × $1,000 / TVL × ' + K.FARM_DAYS + '/' + K.SEASON_DAYS + ' days</div>' +
       '<p>Why these terms: the category multiple is the market\'s own price for a dollar of TVL in that kind of protocol; size corrects for small protocols trading richer per dollar; momentum gives credit for a week of net inflow; runway rewards a protocol that has held its TVL without paying anyone in tokens, the most honest sign of real demand. A token-bearing protocol is never on the board: it is a comp.</p></div>' +
-      '<div class="cols"><div><h3>Category multiples (shrunk)</h3><div class="tbl"><div class="scroll" style="max-height:440px"><table><thead><tr><th>Category</th><th class="r">Comps</th><th class="r">Raw</th><th class="r">Used</th></tr></thead><tbody>' +
-      cats.map(function (c) { return '<tr><td>' + esc(c.category) + '</td><td class="r num">' + c.comps + '</td><td class="r num sub">' + (c.raw == null ? '–' : c.raw.toFixed(3)) + '</td><td class="r num">' + c.multiple.toFixed(3) + '</td></tr>'; }).join('') +
+      '<div class="cols"><div><h3>Category multiples (shrunk)</h3><div class="tbl"><div class="scroll" style="max-height:440px"><table><thead><tr><th>Category</th><th>Family</th><th class="r">Comps</th><th class="r">Raw</th><th class="r">Used</th></tr></thead><tbody>' +
+      cats.map(function (c) { return '<tr><td>' + esc(c.category) + '</td><td class="sub">' + esc(c.family) + '</td><td class="r num">' + c.comps + '</td><td class="r num sub">' + (c.raw == null ? '–' : c.raw.toFixed(3)) + '</td><td class="r num">' + c.multiple.toFixed(3) + '</td></tr>'; }).join('') +
       '</tbody></table></div></div></div><div><h3>Trading comps, by market cap</h3><div class="tbl"><div class="scroll" style="max-height:440px"><table><thead><tr><th>Protocol</th><th>Category</th><th class="r">TVL</th><th class="r">Mcap</th><th class="r">×TVL</th></tr></thead><tbody>' +
-      R.comps.map(function (c) { return '<tr><td><span class="nm">' + esc(c.name) + '</span> <span class="sub">' + esc(c.symbol || '') + '</span></td><td class="sub">' + esc(c.category) + '</td><td class="r num">' + money(c.tvl_usd) + '</td><td class="r num">' + money(c.mcap_usd) + '</td><td class="r num">' + c.ratio.toFixed(3) + '</td></tr>'; }).join('') +
+      R.comps.map(function (c) { return '<tr><td><span class="nm">' + esc(c.name) + '</span> <span class="sub">' + esc(c.symbol || '') + (c.members > 1 ? ' · ' + c.members + ' products' : '') + '</span></td><td class="sub">' + esc(c.category) + '</td><td class="r num">' + money(c.tvl_usd) + '</td><td class="r num">' + money(c.mcap_usd) + '</td><td class="r num">' + c.ratio.toFixed(3) + '</td></tr>'; }).join('') +
       '</tbody></table></div></div></div></div>';
   }
 

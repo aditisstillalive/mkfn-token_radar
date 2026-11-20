@@ -58,10 +58,10 @@ export function buildRadar(s: Snapshot) {
   const radar = {
     model: MODEL_VERSION, as_of: s.as_of, source: s.source, floor_usd: s.floor_usd, constants: K, class_label: CLASS_LABEL,
     counts: { protocols: s.protocols.length, live: s.protocols.length - priced.length, tokenless: priced.length, board: board.length, watch: s.watchlist.length, set_aside: setAside.length },
-    calibration: { comps: cal.comps.length, global_multiple: cal.globalMultiple, slope: cal.slope, slope_raw: cal.slopeRaw, centre_tvl: Math.round(Math.exp(cal.logTvlCentre)), unknown_age_days: cal.unknownAgeDays, categories: Object.values(cal.categories).filter((c) => c.comps > 0 || board.some((r) => (r.category ?? 'Uncategorised') === c.category)) },
+    calibration: { comps: cal.comps.length, global_multiple: cal.globalMultiple, slope: cal.slope, slope_raw: cal.slopeRaw, centre_tvl: Math.round(Math.exp(cal.logTvlCentre)), unknown_age_days: cal.unknownAgeDays, families: Object.values(cal.families), categories: Object.values(cal.categories).filter((c) => c.comps > 0 || board.some((r) => (r.category ?? 'Uncategorised') === c.category)) },
     rows: board.map((r) => ({ ...r, farm_steps: undefined, plan: plans[r.slug] })),
     set_aside: setAside.map(({ p, v }) => ({ slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd, change_7d: p.change_7d, reason: ruleFailure(p), implied_value_usd: v.implied })),
-    comps: cal.comps.slice(0, 60).map((c) => ({ slug: c.slug, name: c.name, symbol: c.symbol, category: c.category, tvl_usd: c.tvl, mcap_usd: c.mcap, ratio: Math.round(c.ratio * 1000) / 1000 })),
+    comps: cal.comps.filter((c, i) => i < 60 || board.some((r) => (r.category ?? 'Uncategorised') === c.category)).map((c) => ({ slug: c.slug, name: c.name, symbol: c.symbol, category: c.category, tvl_usd: c.tvl, mcap_usd: c.mcap, ratio: Math.round(c.ratio * 1000) / 1000, members: c.members })),
   };
   return { board, radar };
 }

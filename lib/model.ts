@@ -4,8 +4,10 @@
 // be worth? We answer by comparison with the snapshot's own protocols whose token already trades.
 //
 //   1. Comps. Every protocol that records a token AND a market cap gives one ratio, mcap / TVL. We take
-//      logs, average per category and shrink each category toward the all-comps mean with a prior of
-//      PRIOR_WEIGHT comps (empirical Bayes), so a category with two comps does not set its own price.
+//      logs and average them in two levels (empirical Bayes): each category is shrunk toward its family
+//      (vault managers, trading venues, credit, real-world assets, infrastructure) with a prior worth
+//      PRIOR_WEIGHT comps, and each family toward the all-comps mean the same way. A category with one
+//      odd comp therefore borrows its price from its peers instead of setting it alone.
 //   2. Size. Small protocols trade at richer multiples than large ones. We fit the slope of the
 //      log-ratio residual on log TVL across the comps by least squares, clamp it, and apply it.
 //   3. Momentum. The 7-day TVL change, clamped, raised to GROWTH_ELASTICITY: a week of inflow is
@@ -110,8 +112,24 @@ const median = (xs: number[]) => {
 };
 const r4 = (x: number) => Math.round(x * 10_000) / 10_000;
 
-export interface Comp { slug: string; name: string; category: string; symbol: string | null; tvl: number; mcap: number; ratio: number }
-export interface CategoryMultiple { category: string; comps: number; raw: number | null; multiple: number }
+export interface Comp { slug: string; name: string; category: string; symbol: string | null; tvl: number; mcap: number; ratio: number; members: number }
+export interface CategoryMultiple { category: string; family: string; comps: number; raw: number | null; multiple: number }
+export interface FamilyMultiple { family: string; comps: number; multiple: number }
+
+/** Categories grouped by how their protocols earn: a thin category borrows strength from its peers. */
+export const FAMILY: Record<string, string> = {
+  'Risk Curators': 'Vault managers', 'Onchain Capital Allocator': 'Vault managers', 'Yield Aggregator': 'Vault managers', Yield: 'Vault managers',
+  'Liquidity Manager': 'Vault managers', 'Options Vault': 'Vault managers', Farm: 'Vault managers', 'Leveraged Farming': 'Vault managers', Indexes: 'Vault managers',
+  Dexs: 'Trading venues', Derivatives: 'Trading venues', 'Prediction Market': 'Trading venues', 'Interest Rate Derivatives': 'Trading venues', Options: 'Trading venues', 'OTC Marketplace': 'Trading venues',
+  Lending: 'Credit & stablecoins', CDP: 'Credit & stablecoins', 'CDP Manager': 'Credit & stablecoins', 'Uncollateralized Lending': 'Credit & stablecoins',
+  'Dual-Token Stablecoin': 'Credit & stablecoins', 'Stablecoin Wrapper': 'Credit & stablecoins', 'Basis Trading': 'Credit & stablecoins', 'Algo-Stables': 'Credit & stablecoins',
+  'Stablecoin Issuer': 'Credit & stablecoins', 'Reserve Currency': 'Credit & stablecoins', 'Collateral Management': 'Credit & stablecoins',
+  Synthetics: 'Trading venues', Launchpad: 'Trading venues', 'NFT Marketplace': 'Trading venues',
+  RWA: 'Real-world assets', CeDeFi: 'Real-world assets', 'RWA Lending': 'Real-world assets', Payments: 'Real-world assets', 'Crypto Card Issuer': 'Real-world assets',
+  Chain: 'Infrastructure', Restaking: 'Infrastructure', 'Collateral Markets': 'Infrastructure', 'Staking Pool': 'Infrastructure', 'Anchor BTC': 'Infrastructure',
+  'Decentralized BTC': 'Infrastructure', Privacy: 'Infrastructure', Insurance: 'Infrastructure', 'Governance Incentives': 'Infrastructure', Oracle: 'Infrastructure',
+};
+export const familyOf = (cat: string) => FAMILY[cat] ?? 'Other';
 export interface Calibration {
   comps: Comp[];
   globalMultiple: number;
@@ -119,16 +137,47 @@ export interface Calibration {
   slopeRaw: number;
   logTvlCentre: number;
   categories: Record<string, CategoryMultiple>;
+  families: Record<string, FamilyMultiple>;
   unknownAgeDays: number;
 }
 
 /** Fit the multiples, the size slope and the unknown-age default from the snapshot itself. */
 export function calibrate(s: Snapshot): Calibration {
-  const comps: Comp[] = s.protocols
-    .filter((p) => hasToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
-    .map((p) => ({ slug: p.slug, name: p.name, category: p.category ?? 'Uncategorised', symbol: p.symbol, tvl: p.tvl_usd, mcap: p.mcap_usd!, ratio: p.mcap_usd! / p.tvl_usd }));
+  // One comp per token. DefiLlama gives every product of a token (Aave V2 and V3, a chain and its bridge)
+  // the token's whole market cap, so protocols sharing a CoinGecko id (or symbol) are merged and their
+  // TVL summed; the comp is named by its largest member. A token whose largest member fails the
+  // watchlist rule (a CEX, a bridge, a liquid-staking wrapper, a versioned name) is dropped: its market
+  // cap prices an exchange, a chain or a base asset, not a dollar of protocol TVL.
+  const groups = new Map<string, SnapshotProtocol[]>();
+  for (const p of s.protocols) {
+    if (!hasToken(p) || p.tvl_usd <= 0) continue;
+    const key = p.gecko_id ?? `sym:${p.symbol}`;
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+  }
+  const comps: Comp[] = [];
+  for (const members of groups.values()) {
+    const lead = [...members].sort((a, b) => b.tvl_usd - a.tvl_usd || a.slug.localeCompare(b.slug))[0]!;
+    const mcap = Math.max(...members.map((m) => m.mcap_usd ?? 0));
+    if (mcap <= 0 || ruleFailure(lead) !== null) continue;
+    const tvl = members.reduce((a, m) => a + m.tvl_usd, 0);
+    comps.push({ slug: lead.slug, name: lead.name, category: lead.category ?? 'Uncategorised', symbol: lead.symbol, tvl, mcap, ratio: mcap / tvl, members: members.length });
+  }
   const lr = (c: Comp) => Math.log(clamp(c.ratio, K.RATIO_MIN, K.RATIO_MAX));
   const globalLog = comps.reduce((a, c) => a + lr(c), 0) / Math.max(1, comps.length);
+
+  // Two-level empirical Bayes: a category is shrunk toward its family, a family toward all comps.
+  const famOf = (cat: string) => familyOf(cat);
+  const byFam = new Map<string, Comp[]>();
+  for (const c of comps) byFam.set(famOf(c.category), [...(byFam.get(famOf(c.category)) ?? []), c]);
+  const families: Record<string, FamilyMultiple> = {};
+  const famLog = new Map<string, number>();
+  for (const fam of [...new Set([...Object.values(FAMILY), 'Other'])].sort()) {
+    const fs = byFam.get(fam) ?? [];
+    const sum = fs.reduce((a, c) => a + lr(c), 0);
+    const shrunk = fam === 'Other' ? globalLog : (sum + K.PRIOR_WEIGHT * globalLog) / (fs.length + K.PRIOR_WEIGHT);
+    famLog.set(fam, shrunk);
+    families[fam] = { family: fam, comps: fs.length, multiple: r4(Math.exp(shrunk)) };
+  }
 
   const byCat = new Map<string, Comp[]>();
   for (const c of comps) byCat.set(c.category, [...(byCat.get(c.category) ?? []), c]);
@@ -138,9 +187,10 @@ export function calibrate(s: Snapshot): Calibration {
   for (const cat of [...allCats].sort()) {
     const cs = byCat.get(cat) ?? [];
     const sum = cs.reduce((a, c) => a + lr(c), 0);
-    const shrunk = (sum + K.PRIOR_WEIGHT * globalLog) / (cs.length + K.PRIOR_WEIGHT);
+    const prior = famLog.get(famOf(cat))!;
+    const shrunk = (sum + K.PRIOR_WEIGHT * prior) / (cs.length + K.PRIOR_WEIGHT);
     catLog.set(cat, shrunk);
-    categories[cat] = { category: cat, comps: cs.length, raw: cs.length ? r4(Math.exp(sum / cs.length)) : null, multiple: r4(Math.exp(shrunk)) };
+    categories[cat] = { category: cat, family: famOf(cat), comps: cs.length, raw: cs.length ? r4(Math.exp(sum / cs.length)) : null, multiple: r4(Math.exp(shrunk)) };
   }
 
   // Least-squares slope of the residual (log ratio minus its category's shrunk mean) on centred log TVL.
@@ -162,6 +212,7 @@ export function calibrate(s: Snapshot): Calibration {
     slopeRaw: r4(slopeRaw),
     logTvlCentre,
     categories,
+    families,
     unknownAgeDays: Math.round(median(ages)),
   };
 }
