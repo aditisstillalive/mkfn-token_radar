@@ -48,7 +48,7 @@ export interface Snapshot {
 export const MODEL_VERSION = 'comps-v2';
 
 export const K = {
-  PRIOR_WEIGHT: 4, // comps-worth of pull toward the all-comps mean
+  PRIOR_WEIGHT: 6, // comps-worth of pull toward the all-comps mean
   RATIO_MIN: 0.01, // mcap/TVL ratios are clamped into [min, max] before the log
   RATIO_MAX: 25,
   SLOPE_MIN: -0.45, // the fitted size slope is clamped into this band

@@ -12,7 +12,7 @@
 //
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/board.ts';
@@ -50,6 +50,7 @@ writeFileSync(join(out, 'data.js'), dataScript(radar));
 /** Copy the plain files of one directory, sorted, so the copy is the same every run. */
 function copyDir(from: string, to: string): string[] {
   if (!existsSync(from)) return [];
+  rmSync(to, { recursive: true, force: true }); // never leave a stale file for the dossier to pick up
   mkdirSync(to, { recursive: true });
   const names = readdirSync(from).filter((n) => !n.startsWith('.') && statSync(join(from, n)).isFile()).sort();
   for (const n of names) {

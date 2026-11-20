@@ -3,12 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar</title>
+<meta name="description" content="Tokenless DeFi protocols ranked by an implied token value priced from the snapshot's own trading comps, with a costed farm plan for each.">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<header class="top">
+  <div class="brand"><span class="dot" aria-hidden="true"></span><h1>Token Radar</h1><span class="ver" id="ver"></span></div>
+  <nav class="tabs" role="tablist">
+    <a role="tab" href="#/board" data-tab="board">Board</a>
+    <a role="tab" href="#/aside" data-tab="aside">Set aside <b id="n-aside"></b></a>
+    <a role="tab" href="#/model" data-tab="model">Model &amp; comps</a>
+  </nav>
+  <div class="asof" id="asof"></div>
+</header>
+<section class="kpis" id="kpis" aria-label="Summary"></section>
+<main id="app" aria-live="polite"></main>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
