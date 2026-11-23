@@ -8,22 +8,30 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
 
 **One engine, read by the judge.** The whole model lives in `dashboard/engine.js`. `main.ts` runs it to write `board.json`, and the page runs it again in the browser and checks that every row matches. Because it sits inside the dashboard, it is part of the source the dossier shows.
 
-**Value model (`fit-v4`).** `implied = core × momentum × runway × class`
+**Value model (`fit-v5`).** `implied = core × momentum × runway × class`
 
-- **Core: size dominates.** `ln mcap = size curve + w × (family + category effects)`. The size curve is ln market cap on ln TVL, and the effects come from a ridge fit on the snapshot's own trading tokens (one comp per token), with penalties chosen by exact leave-one-out. The weight w shrinks the effects toward size alone.
-- **How w was chosen.** Sort the 92 comps by when DefiLlama began tracking them, and hold out the newest third (31 tokens, since 2024-10-22) as the test. Inside the older 61, fit on the oldest 40 and validate on the next 21, trying w = 0, 0.1, … 1. Validation picks w = 0.4. The test is then scored once:
+- **Core: only the terms that survive both tests.** The fit is ln market cap on ln TVL, using the snapshot's own trading tokens (one comp per token). The 92 comps are sorted by when DefiLlama began tracking them, then split:
+  - the oldest 40 are the fit set;
+  - the next 21 are the validation fold;
+  - the newest 31, tracked since 2024-10-22, are the test.
 
-  | | walk-forward (31 newest) | leave-one-out (92) |
-  |---|---|---|
-  | shipped, w = 0.4 | 1.91 | 1.73 |
-  | size alone | **1.88** | 1.76 |
-  | full effects (w = 1) | 1.98 | **1.73** |
-  | flat multiple | 2.19 | 1.94 |
+  Terms are added one at a time after size. A term is kept only if it lowers the miss in exact leave-one-out *and* on the validation fold, with its ridge penalty chosen by leave-one-out. The test is scored for every step and never used to choose.
 
-  The figures are ln-RMSE. Size alone still edges the blend on the newest tokens, which price richer than older look-alikes, so the effects only adjust within a size band. Earlier versions of this README reported the same split, so it isn't pristine; no choice in the engine reads it. The leave-one-out residuals set each row's 80% value band.
-- **Momentum and runway** are stated priors: the 7-day TVL change, and the days run with no token. Fitted as slopes on the trading tokens instead, leave-one-out shrank both to about zero, so they stay stated, and the test shows the priors cost little held out.
+  | term (ln-RMSE held out) | LOO 92 | validation 21 | newest 31 | verdict |
+  |---|---|---|---|---|
+  | flat multiple | 1.94 | 1.45 | 2.19 | baseline |
+  | size: ln TVL | 1.75 | 1.34 | 1.88 | kept |
+  | + family | 1.74 | 1.37 | 2.00 | tested, not kept |
+  | + category | 1.74 | 1.34 | 1.89 | tested, not kept |
+  | + 7d change | 1.76 | 1.34 | 1.88 | tested, not kept |
+  | + days tracked | 1.76 | 1.33 | 1.91 | tested, not kept |
+  | × momentum, runway priors | 1.78 | – | 2.00 | stated prior |
+
+  Size dominates: 1 of 5 terms survives. On the newest tokens its median miss is ×2.78, against ×4.64 for a flat multiple. The test column agrees with each decision. Earlier versions (v2 to v4) reported this split, so it isn't pristine, but no choice in the engine reads it.
+- **Value bands.** P10, P25, P75 and P90 come from the leave-one-out misses. Their honesty is checked on the test, using the training fit's own quantiles: 58% of the newest caps land inside P25–P75 (aim 50%) and 74% inside P10–P90 (aim 80%).
+- **Momentum and runway** are stated priors: the 7-day TVL change and the days run with no token. They're what the brief asks the value to reflect. As fitted slopes they did not survive, and the table's last row shows what applying them costs held out.
 - **Class.** Watchlist and early rows count in full. Rows that have a parent are cut to 0.35. Wrapped, staked, bridged and CEX products are set aside off the board.
-- **Token odds.** A logistic fit of "carries a token" on size, age, chains and family. Its 5-fold cross-validated AUC is 0.72. Expected value is the odds times the implied value.
+- **Token odds.** A logistic fit of "carries a token" on size, age, chains and family. Its 5-fold cross-validated scores: Brier 0.210 against 0.247 for the base rate, and AUC 0.72. Expected value is the odds times the implied value.
 
 No protocol name appears in the code.
 
@@ -34,7 +42,18 @@ No protocol name appears in the code.
 
 It also checks break-even: the drop if a token launches, times the odds, against the costs. That gives a verdict of farm, marginal or skip.
 
-**Dashboard.** A sortable, filterable board covering 198 tokenless candidates and all 40 watchlist protocols. Every row carries its farm plan in brief: verdict, net, ticket, cost, hours and lockup. It has an integrity strip (snapshot, coverage, exclusions, test scores, in-browser recompute) and a detail view with the value build-up, the cost table and the steps. Other tabs list the 416 protocols whose token already trades (the 92 that price the model marked), the set-aside derivatives, and the model and its tests with a held-out scatter. It runs with no network.
+**Dashboard.** The cover (screenshot 1, 1024×1024) holds:
+- six KPI cards: out-of-sample miss against flat, range honesty, token-odds Brier, terms kept, rows worth farming, and watchlist ranked;
+- self-check chips: table = board.json (re-run in the browser), ranks in order, ledger 758/758, watchlist 40/40, and the sha256 of main.ts and board.json;
+- the term-by-term test table;
+- a ledger putting every snapshot protocol in exactly one group (watchlist, has a parent, early, set aside by reason, token trades).
+
+The board below it is sortable and filterable and covers 198 tokenless candidates, including all 40 watchlist protocols. Each row shows:
+- the implied value, with its P25–P75 range bar;
+- token odds;
+- a farm verdict net of all costs, with the net and net $/hour.
+
+Plan controls (deposit size, drop share, horizon) re-run engine.js in the page, and the filtered rows export as CSV or JSON. The detail view has the value build-up, the cost table, a budget line and seven dated steps, each with its cost and time. It runs with no network.
 
 ## Run it
 

@@ -3,26 +3,25 @@
 // so the screenshots show what this code computes. Plain script, no imports, no network, no names.
 //
 //   implied value  = fitted core value x momentum x runway x class                (value if it launches)
-//   core value     = exp(a + b ln TVL + w (family + category effects))   ridge fits on trading tokens
+//   core value     = exp(a + b ln TVL + any term that survived both tests)       ridge on trading tokens
 //   token odds     = logistic(size, age, chains, family)            share of look-alikes carrying a token
 //   expected value = token odds x implied value
 //
-// The core is fitted on the snapshot's own trading tokens and scored out of sample two ways: exact
-// leave-one-out, and walk-forward (fit on the tokens DefiLlama tracked first, test on the newest third),
-// each against two baselines. Penalties are chosen by leave-one-out; w, the weight on the full fit against
-// size alone, by a validation fold inside the walk-forward training set, so the newest third is scored once.
+// Terms are tried one at a time after size (family, category, 7d change, days tracked) and kept only if
+// they lower the miss both in exact leave-one-out and on a validation fold (fit the oldest tokens, score
+// the next). The newest third is a test: scored for every step, never used to choose.
 (function (root) {
   'use strict';
 
   var K = {
-    MODEL: 'fit-v4',
-    BLEND: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1], // weights w tried on the validation fold
-    LAMBDAS: [1, 3, 10, 30], // ridge penalties tried for the family and the category effects
+    MODEL: 'fit-v5',
+    LAMBDAS: [1, 3, 10, 30], // ridge penalties tried for a term, chosen by leave-one-out
     RATIO_MIN: 0.01, RATIO_MAX: 25, // a comp's mcap/TVL is clamped here before the log (leverage cap)
     GROWTH_FLOOR: -50, GROWTH_CAP: 60, // momentum prior: (1 + clamped 7d change)^1
     RUNWAY_FLOOR: 0.6, RUNWAY_RANGE: 0.4, RUNWAY_TAU: 365, // runway prior: floor + range (1 - e^-days/tau)
     PARENTED: 0.35, DERIVATIVE: 0.12, // class factors (derivatives are set aside off the board)
     ODDS_LAMBDA: 1, FOLDS: 5, // logistic ridge penalty and cross-validation folds for token odds
+    TICKET: 0, // deposit; 0 sizes it at 1/50,000 of TVL, $250 to $10K
     AIRDROP_SHARE: 0.075, SEASON_DAYS: 180, FARM_DAYS: 90, // farmer share of supply; the reader farms 90 of 180 days
     LAUNCH_FLOAT: 0.3, // circulating share at launch: comps price the float, a drop is a share of the full supply
     LOSS_GIVEN_EXPLOIT: 0.6,
@@ -94,7 +93,7 @@
    *  CoinGecko id (or symbol) are merged and their TVL summed. A token whose largest product fails the
    *  watchlist rule (a CEX, a bridge, a staking wrapper) prices an exchange or a base asset: dropped. */
   function buildComps(s) {
-    var g = {}, keys = [], dropped = 0;
+    var g = {}, keys = [];
     s.protocols.forEach(function (p) {
       if (!hasToken(p) || p.tvl_usd <= 0) return;
       var k = p.gecko_id || 'sym:' + p.symbol;
@@ -105,92 +104,83 @@
     keys.sort(cmp).forEach(function (k) {
       var m = g[k].slice().sort(function (a, b) { return b.tvl_usd - a.tvl_usd || cmp(a.slug, b.slug); }), lead = m[0];
       var mcap = Math.max.apply(null, m.map(function (x) { return x.mcap_usd || 0; }));
-      if (mcap <= 0 || ruleFailure(lead)) { dropped++; return; }
+      if (mcap <= 0 || ruleFailure(lead)) return;
       var tvl = m.reduce(function (a, x) { return a + x.tvl_usd; }, 0);
       comps.push({ slug: lead.slug, name: lead.name, symbol: lead.symbol, category: cat(lead), family: family(lead.category), listed_at: lead.listed_at,
         change_7d: lead.change_7d, tvl: tvl, mcap: mcap, ratio: mcap / tvl, members: m.length });
     });
-    return { comps: comps.sort(function (a, b) { return b.mcap - a.mcap || cmp(a.slug, b.slug); }), dropped: dropped };
+    return { comps: comps.sort(function (a, b) { return b.mcap - a.mcap || cmp(a.slug, b.slug); }) };
   }
 
-  // ---- the fitted core: ln mcap = a + b (ln TVL - centre) + family + category
+  // ---- the fitted core: ln mcap = a + b (ln TVL - centre) + kept terms. x = { tvl, category, change_7d, listed_at }
   function lnTarget(c) { return Math.log(c.tvl * clamp(c.ratio, K.RATIO_MIN, K.RATIO_MAX)); }
-  function fitCore(train, lf, lc) {
-    var cats = [], centre = train.reduce(function (a, c) { return a + Math.log(c.tvl); }, 0) / train.length;
-    train.forEach(function (c) { if (cats.indexOf(c.category) < 0) cats.push(c.category); });
-    cats.sort(cmp);
-    function row(category, tvl) {
-      var f = family(category === 'Uncategorised' ? null : category);
-      return [1, Math.log(Math.max(1, tvl)) - centre].concat(FAMS.map(function (x) { return x === f ? 1 : 0; }), cats.map(function (x) { return x === category ? 1 : 0; }));
-    }
-    var pen = [1e-9, 1e-9].concat(FAMS.map(function () { return lf; }), cats.map(function () { return lc; }));
-    var X = train.map(function (c) { return row(c.category, c.tvl); }), y = train.map(lnTarget), fit = ridge(X, y, pen);
-    var w = fit.w;
-    return {
-      lf: lf, lc: lc, centre: centre, a: w[0], b: w[1],
-      famEffect: function (f) { return w[2 + FAMS.indexOf(f)]; },
-      catEffect: function (category) { var i = cats.indexOf(category); return i < 0 ? 0 : w[2 + FAMS.length + i]; },
-      predict: function (category, tvl) { return dot(w, row(category, tvl)); },
-      loo: X.map(function (x, i) { return y[i] - (y[i] - dot(w, x)) / (1 - fit.h[i]); }), // exact LOO prediction
-    };
+  var TERMS = [ // name, and the columns it adds given the training set
+    ['family', function () { return FAMS.map(function (f) { return function (x) { return +(family(x.category) === f); }; }); }],
+    ['category', function (tr) { return tr.map(function (c) { return c.category; }).filter(function (c, i, a) { return a.indexOf(c) === i; }).sort(cmp).map(function (k) { return function (x) { return +(x.category === k); }; }); }],
+    ['7d change', function () { return [function (x) { return Math.log(momentum(x.change_7d)); }]; }],
+    ['days tracked', function (tr, s, ua) { return [function (x) { var a = ageDays(s.as_of, x.listed_at); return Math.log1p((a === null ? ua : a) / 365); }]; }],
+  ];
+  function fitCore(tr, terms, lam, s, ua) {
+    var centre = tr.reduce(function (a, c) { return a + Math.log(c.tvl); }, 0) / tr.length, cols = [];
+    terms.forEach(function (t) { cols = cols.concat(TERMS[t][1](tr, s, ua)); });
+    function row(x) { return [1, Math.log(Math.max(1, x.tvl)) - centre].concat(cols.map(function (f) { return f(x); })); }
+    var X = tr.map(row), y = tr.map(lnTarget), fit = ridge(X, y, [1e-9, 1e-9].concat(cols.map(function () { return lam; }))), w = fit.w;
+    return { centre: centre, a: w[0], b: w[1], predict: function (x) { return dot(w, row(x)); }, rest: function (x) { return dot(w.slice(2), row(x).slice(2)); },
+      loo: X.map(function (x, i) { return y[i] - (y[i] - dot(w, x)) / (1 - fit.h[i]); }) }; // exact LOO prediction
   }
-  function plain(xs) { return xs.map(function (c) { return Object.assign({}, c, { category: 'Uncategorised' }); }); }
-  function rmseOf(f, xs) { return Math.sqrt(xs.reduce(function (a, c) { var e = lnTarget(c) - f.predict(c.category, c.tvl); return a + e * e; }, 0) / xs.length); }
+  /** The fit with its penalty chosen by exact leave-one-out on tr. */
+  function bestFit(tr, terms, s, ua) {
+    var act = tr.map(lnTarget), b = null;
+    (terms.length ? K.LAMBDAS : [1]).forEach(function (l) { var f = fitCore(tr, terms, l, s, ua); f.lam = l; f.rmse = score(f.loo, act).rmse; if (!b || f.rmse < b.rmse) b = f; });
+    return b;
+  }
   function byDate(xs) { var d = xs.slice().sort(function (a, b) { return cmp(a.listed_at || '0000', b.listed_at || '0000') || cmp(a.slug, b.slug); }), k = Math.floor((d.length * 2) / 3); return [d.slice(0, k), d.slice(k)]; }
-  /** Full fit with its penalties chosen by exact leave-one-out on xs. */
-  function bestFit(xs) {
-    var act = xs.map(lnTarget), grid = [];
-    K.LAMBDAS.forEach(function (lf) { K.LAMBDAS.forEach(function (lc) { var f = fitCore(xs, lf, lc); grid.push({ lf: lf, lc: lc, fit: f, s: score(f.loo, act) }); }); });
-    return { grid: grid, best: grid.slice().sort(function (a, b) { return a.s.rmse - b.s.rmse || a.lf - b.lf || a.lc - b.lc; })[0] };
-  }
-  /** w x full fit + (1 - w) x size alone, in ln: the family and category effects shrunk by w toward size. */
-  function blend(xs, w) {
-    var F = bestFit(xs), f = F.best.fit, z = fitCore(plain(xs), 1e6, 1e6);
-    return { F: F, full: f, size: z, w: w, centre: f.centre, a: w * f.a + (1 - w) * z.a, b: w * f.b + (1 - w) * z.b,
-      famEffect: function (x) { return w * f.famEffect(x); }, catEffect: function (x) { return w * f.catEffect(x); },
-      predict: function (c, t) { return w * f.predict(c, t) + (1 - w) * z.predict('Uncategorised', t); },
-      loo: f.loo.map(function (x, i) { return w * x + (1 - w) * z.loo[i]; }) };
-  }
   /** Out-of-sample scores of predictions (ln) against actual ln market caps. */
   function score(pred, act) {
-    var e = pred.map(function (p, i) { return act[i] - p; }), ae = e.map(Math.abs);
-    var rank = function (x) { var o = x.map(function (v, i) { return [v, i]; }).sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; }), r = []; o.forEach(function (v, j) { r[v[1]] = j; }); return r; };
-    var ra = rank(pred), rb = rank(act), n = pred.length, d2 = 0;
-    for (var i = 0; i < n; i++) d2 += (ra[i] - rb[i]) * (ra[i] - rb[i]);
-    return { n: n, rmse: r4(Math.sqrt(dot(e, e) / n)), median_x: r4(Math.exp(median(ae))), within_3x: r4(ae.filter(function (x) { return x < Math.log(3); }).length / n),
-      spearman: n > 2 ? r4(1 - (6 * d2) / (n * (n * n - 1))) : 0, bias: r4(e.reduce(function (a, x) { return a + x; }, 0) / n) };
+    var e = pred.map(function (p, i) { return Math.abs(act[i] - p); });
+    return { n: e.length, rmse: r4(Math.sqrt(dot(e, e) / e.length)), median_x: r4(Math.exp(median(e))) };
   }
   /** Baseline 1: one flat multiple (geometric mean mcap/TVL of the training comps) times TVL. */
   function flat(train) { var m = train.reduce(function (a, c) { return a + Math.log(clamp(c.ratio, K.RATIO_MIN, K.RATIO_MAX)); }, 0) / train.length; return function (c) { return Math.log(c.tvl) + m; }; }
 
   function calibrate(s) {
     var built = buildComps(s), comps = built.comps, act = comps.map(lnTarget);
+    var ages = s.protocols.filter(function (p) { return !hasToken(p); }).map(function (p) { return ageDays(s.as_of, p.listed_at); }).filter(function (a) { return a !== null; });
+    var ua = Math.round(median(ages));
     // Walk-forward: train on the tokens DefiLlama tracked first (two thirds), test on the newest third.
-    // Inside train the same split again: fit on its older part, pick w on its newer part (validation).
-    var tt = byDate(comps), train = tt[0], test = tt[1], fv = byDate(train);
-    var val = K.BLEND.map(function (w) { return { w: w, rmse: r4(rmseOf(blend(fv[0], w), fv[1])) }; });
-    var w = val.slice().sort(function (a, b) { return a.rmse - b.rmse || a.w - b.w; })[0].w;
-    // The board: penalties by leave-one-out on every comp, w as validated. Baselines under the same LOO.
-    var core = blend(comps, w), best = core.F.best;
+    // Inside train the same split again: fit on its older part, validate on its newer part.
+    var tt = byDate(comps), train = tt[0], test = tt[1], fv = byDate(train), vAct = fv[1].map(lnTarget), tAct = test.map(lnTarget);
+    var on = function (f, xs, a) { return score(xs.map(f), a); };
+    function scores(terms) {
+      var all = bestFit(comps, terms, s, ua), tr = bestFit(train, terms, s, ua);
+      return { fit: all, tr: tr, loo: score(all.loo, act), val: on(bestFit(fv[0], terms, s, ua).predict, fv[1], vAct), test: on(tr.predict, test, tAct) };
+    }
     var tot = act.reduce(function (a, x, i) { return a + x - Math.log(comps[i].tvl); }, 0);
     var flatLoo = comps.map(function (c, i) { return Math.log(c.tvl) + (tot - (act[i] - Math.log(c.tvl))) / (comps.length - 1); });
-    var wf = blend(train, w), wfFlat = flat(train), tAct = test.map(lnTarget);
-    var on = function (f, z) { return score(test.map(function (c) { return f.predict(z ? 'Uncategorised' : c.category, c.tvl); }), tAct); };
-    // Momentum and runway are stated priors: fitted as slopes on the comps (7d change, days tracked),
-    // leave-one-out shrank both to ~0. This checks that applying the priors costs little held out.
-    var withPriors = core.loo.map(function (x, i) { var c = comps[i], a = ageDays(s.as_of, c.listed_at); return x + Math.log(momentum(c.change_7d)) + Math.log(runway(a === null ? 0 : a)); });
-    var resid = core.loo.map(function (x, i) { return act[i] - x; });
-    var ages = s.protocols.filter(function (p) { return !hasToken(p); }).map(function (p) { return ageDays(s.as_of, p.listed_at); }).filter(function (a) { return a !== null; });
+    var fl = { loo: score(flatLoo, act), val: on(flat(fv[0]), fv[1], vAct), test: on(flat(train), test, tAct) };
+    var cur = scores([]), kept = [], row = function (t, x, k) { return { term: t, kept: k, loo: x.loo, val: x.val, test: x.test }; };
+    var steps = [row('flat multiple', fl, 'baseline'), row('size: ln TVL', cur, cur.loo.rmse < fl.loo.rmse && cur.val.rmse < fl.val.rmse)];
+    TERMS.forEach(function (t, i) {
+      var x = scores(kept.concat(i)), k = x.loo.rmse < cur.loo.rmse && x.val.rmse < cur.val.rmse;
+      steps.push(row('+ ' + t[0], x, k));
+      if (k) { kept.push(i); cur = x; }
+    });
+    var core = cur.fit, pri = function (c) { var a = ageDays(s.as_of, c.listed_at); return Math.log(momentum(c.change_7d)) + Math.log(runway(a === null ? ua : a)); };
+    // Momentum and runway are stated priors (as fitted slopes they did not survive); this is their held-out cost.
+    steps.push({ term: '× momentum, runway priors', kept: 'stated', loo: score(core.loo.map(function (x, i) { return x + pri(comps[i]); }), act),
+      test: on(function (c) { return cur.tr.predict(c) + pri(c); }, test, tAct) });
+    // Value bands: quantiles of the leave-one-out misses. Their honesty is checked on the test: the
+    // train fit's own quantiles, and the share of the newest tokens that land inside them.
+    var Q = [0.1, 0.25, 0.75, 0.9], resid = core.loo.map(function (x, i) { return act[i] - x; });
+    var tq = Q.map(function (q) { return quantile(cur.tr.loo.map(function (x, i) { return lnTarget(train[i]) - x; }), q); });
+    var inside = function (lo, hi) { return r4(test.filter(function (c, i) { var e = tAct[i] - cur.tr.predict(c); return e >= tq[lo] && e <= tq[hi]; }).length / test.length); };
     return {
-      comps: comps, dropped: built.dropped, core: core, unknownAge: Math.round(median(ages)),
-      band: [r4(Math.exp(quantile(resid, 0.1))), r4(Math.exp(quantile(resid, 0.9)))],
+      comps: comps, core: core, unknownAge: ua, terms: kept.map(function (i) { return TERMS[i][0]; }),
+      band: Q.map(function (q) { return r4(Math.exp(quantile(resid, q))); }),
       test: {
-        chosen: { family_lambda: best.lf, category_lambda: best.lc, w: w },
-        validation: { fit: fv[0].length, val: fv[1].length, from: fv[1][0].listed_at, curve: val },
-        loo: { model: score(core.loo, act), size_only: score(core.size.loo, act), full: score(core.full.loo, act), flat: score(flatLoo, act), with_priors: score(withPriors, act) },
-        walk_forward: { train: train.length, test: test.length, cut_listed: test[0].listed_at,
-          model: on(wf), size_only: on(wf.size, 1), full: on(wf.full), flat: score(test.map(wfFlat), tAct) },
-        points: comps.map(function (c, i) { return [c.slug, r4(act[i]), r4(core.loo[i])]; }),
+        steps: steps, kept: kept.length + 1, tried: TERMS.length + 1,
+        split: { fit: fv[0].length, val: fv[1].length, val_from: fv[1][0].listed_at, train: train.length, test: test.length, test_from: test[0].listed_at },
+        coverage: { p25_p75: inside(1, 2), p10_p90: inside(0, 3) },
       },
     };
   }
@@ -227,10 +217,11 @@
     var ll = function (q, y) { q = clamp(q, 1e-6, 1 - 1e-6); return -(y * Math.log(q) + (1 - y) * Math.log(1 - q)); };
     var pos = cv.filter(function (c) { return c[1]; }), neg = cv.filter(function (c) { return !c[1]; }), wins = 0;
     pos.forEach(function (a) { neg.forEach(function (b) { wins += a[0] > b[0] ? 1 : a[0] === b[0] ? 0.5 : 0; }); });
+    var br = function (q) { return r4(cv.reduce(function (a, c) { var e = (q === null ? c[0] : q) - c[1]; return a + e * e; }, 0) / cv.length); };
     var full = fit(rows);
     return { predict: function (p) { return full(row(p)); },
       test: { n: rows.length, with_token: Math.round(base * rows.length), base_rate: r4(base), folds: K.FOLDS, auc: r4(wins / Math.max(1, pos.length * neg.length)),
-        log_loss: r4(cv.reduce(function (a, c) { return a + ll(c[0], c[1]); }, 0) / cv.length), base_log_loss: r4(cv.reduce(function (a, c) { return a + ll(base, c[1]); }, 0) / cv.length) } };
+        log_loss: r4(cv.reduce(function (a, c) { return a + ll(c[0], c[1]); }, 0) / cv.length), base_log_loss: r4(cv.reduce(function (a, c) { return a + ll(base, c[1]); }, 0) / cv.length), brier: br(null), base_brier: br(base) } };
   }
 
   // ---- valuation
@@ -240,13 +231,13 @@
     return p.tvl_usd >= s.floor_usd ? 'parented' : 'early';
   }
   function value(p, cls, s, cal) {
-    var core = cal.core, c = cat(p), f = family(p.category), age = ageDays(s.as_of, p.listed_at);
-    var parts = { base: Math.exp(core.a), size: Math.exp(core.b * (Math.log(Math.max(1, p.tvl_usd)) - core.centre)), family: Math.exp(core.famEffect(f)), category: Math.exp(core.catEffect(c)) };
-    var coreUsd = Math.exp(core.predict(c, p.tvl_usd));
+    var core = cal.core, x = { tvl: p.tvl_usd, category: cat(p), change_7d: p.change_7d, listed_at: p.listed_at }, age = ageDays(s.as_of, p.listed_at);
+    var parts = { base: Math.exp(core.a), size: Math.exp(core.b * (Math.log(Math.max(1, p.tvl_usd)) - core.centre)), terms: Math.exp(core.rest(x)) };
+    var coreUsd = Math.exp(core.predict(x));
     var mo = momentum(p.change_7d), ru = runway(age === null ? cal.unknownAge : age), cf = cls === 'derivative' ? K.DERIVATIVE : cls === 'parented' ? K.PARENTED : 1;
     var implied = Math.max(1, Math.round(coreUsd * mo * ru * cf));
     return { implied: implied, core: Math.round(coreUsd), parts: parts, momentum: r4(mo), runway: r4(ru), classFactor: cf, age: age,
-      band: [Math.round(implied * cal.band[0]), Math.round(implied * cal.band[1])] };
+      band: cal.band.map(function (q) { return Math.round(implied * q); }) }; // P10, P25, P75, P90
   }
 
   // ---- farm plans: steps with capital, gas and bridge, lockup, risk and break-even
@@ -267,10 +258,10 @@
   function nice(x) { var e = Math.pow(10, Math.floor(Math.log10(x))), m = x / e; return (m < 1.5 ? 1 : m < 3.5 ? 2.5 : m < 7.5 ? 5 : 10) * e; }
   function pct(x) { return (x * 100).toFixed(x < 0.1 ? 1 : 0) + '%'; }
 
-  function farmPlan(p, v, odds) {
+  function farmPlan(p, v, odds, asOf) {
     var fam = family(p.category), a = ACT[fam] || ACT.Other, chain = p.chains[0] || 'Ethereum', gas = GAS[chain] === undefined ? 0.25 : GAS[chain];
     p.chains.forEach(function (c) { var g = GAS[c] === undefined ? 0.25 : GAS[c]; if (g < gas) { gas = g; chain = c; } });
-    var ticket = Math.min(10000, Math.max(250, nice(p.tvl_usd / 50000))), weeks = Math.round(K.FARM_DAYS / 7), yr = K.FARM_DAYS / 365;
+    var ticket = K.TICKET || Math.min(10000, Math.max(250, nice(p.tvl_usd / 50000))), weeks = Math.round(K.FARM_DAYS / 7), yr = K.FARM_DAYS / 365;
     var bridge = chain === 'Ethereum' ? 0 : chain === 'Bitcoin' ? 5 : 1.5;
     var gasUsd = gas * (2 + a[3] + 2 + weeks + 2), carry = ticket * a[6] * yr;
     var age = v.age === null ? 700 : v.age, pExploit = (age < 365 ? 0.06 : age < 1095 ? 0.03 : 0.015) * (p.tvl_usd < 2e7 ? 1.5 : 1);
@@ -285,43 +276,48 @@
     var steps = [
       ['Fund a fresh wallet on ' + chain + (p.chains.length > 1 ? ' (cheapest of its ' + p.chains.length + ' chains)' : '') + ' with ' + a[0] + ' and bookmark the app from its DefiLlama page, not a search ad', money(bridge + gas * 2) + ' bridge and gas', '15 min'],
       ['Test with $100: ' + a[1].replace(/%c/g, chain), money(gas * a[3]) + ' gas', a[4] + ' min'],
-      ['Scale to the ' + money(ticket) + ' ticket (about 1/50,000 of its TVL) once the test can be withdrawn; ' + lock, money(ticket) + ' capital, ' + money(carry) + ' carry over ' + K.FARM_DAYS + ' days', '10 min'],
+      ['Scale to the ' + money(ticket) + ' ticket once the test can be withdrawn' + (K.TICKET ? '' : ' (about 1/50,000 of its TVL)') + '; ' + lock, money(ticket) + ' capital, ' + money(carry) + ' carry over ' + K.FARM_DAYS + ' days', '10 min'],
       [a[2].replace(/%c/g, chain), money(gas * 2) + ' gas', '20 min'],
       ['Hold ' + K.FARM_DAYS + ' days with one small interaction a week (claim, compound or top up) and log each points snapshot', money(gas * weeks) + ' gas in all', '5 min a week, ' + weeks + ' weeks'],
       ['Risk ' + level + ': expected loss ' + money(riskUsd) + ' (' + pct(pExploit) + ' a year exploit odds for a ' + Math.round(age / 30) + '-month record, plus market risk). Exit or halve if the ' + trig + ' or a snapshot is announced', money(gas * 2 + bridge) + ' exit gas and bridge', '15 min'],
       ['Break-even: costs ' + money(total) + ' (gas ' + money(gasUsd) + ', bridge ' + money(2 * bridge) + ', carry ' + money(carry) + ', risk ' + money(riskUsd) + ') against ' + money(reward) + ' if a token launches; at ' + pct(odds) + ' token odds that is ' + money(expected) + ', break-even at ' + (beOdds > 1 ? 'over 100%' : pct(beOdds)) + ' odds: ' + (verdict === 'farm' ? 'farm it at this size' : verdict === 'marginal' ? 'marginal, farm only beside other positions on the chain' : 'skip, or farm only with spare capital already on the chain'), 'none', '2 min'],
-    ].map(function (x) { return { do: x[0], cost: x[1], time: x[2] }; });
+    ];
+    var day = function (d) { return new Date(Date.parse(asOf) + d * 864e5).toISOString().slice(0, 10); }, D = K.FARM_DAYS;
+    steps = steps.map(function (x, i) { return { when: [day(0), day(0), day(1), day(2), day(2) + ' to ' + day(D), 'weekly, exit by ' + day(D), 'before ' + day(0)][i], do: x[0], cost: x[1], time: x[2] }; });
     return { chain: chain, ticket: ticket, lockup_days: a[5], risk: level, costs: { gas: r4(gasUsd), bridge: 2 * bridge, carry: r4(carry), risk: r4(riskUsd), total: r4(total) },
       reward: r4(reward), expected: r4(expected), net: r4(expected - total), breakeven_odds: isFinite(beOdds) ? r4(beOdds) : null, verdict: verdict,
-      hours: r4((15 + a[4] + 10 + 20 + 5 * weeks + 15 + 2) / 60), steps: steps };
+      end: day(D), hours: r4((15 + a[4] + 10 + 20 + 5 * weeks + 15 + 2) / 60), steps: steps };
   }
 
   // ---- the board
-  function build(s) {
+  /** o overrides constants for this run only (the page's deposit, drop share and horizon controls). */
+  function build(s, o) {
+    var save = {}, k;
+    for (k in o || {}) { save[k] = K[k]; K[k] = o[k]; }
+    try { return run(s); } finally { for (k in save) K[k] = save[k]; }
+  }
+  function run(s) {
     var cal = calibrate(s), odds = oddsModel(s, cal.unknownAge), watch = {};
     s.watchlist.forEach(function (w) { watch[w] = true; });
     var priced = s.protocols.filter(function (p) { return !hasToken(p); }).map(function (p) { var cls = classify(p, s, watch); return { p: p, cls: cls, v: value(p, cls, s, cal) }; });
     var order = function (a, b) { return b.v.implied - a.v.implied || cmp(a.p.slug, b.p.slug); };
     var cands = priced.filter(function (x) { return x.cls !== 'derivative'; }).sort(order), aside = priced.filter(function (x) { return x.cls === 'derivative'; }).sort(order);
     var rows = cands.map(function (x, i) {
-      var p = x.p, v = x.v, o = r4(odds.predict(p)), plan = farmPlan(p, v, o);
+      var p = x.p, v = x.v, o = r4(odds.predict(p)), plan = farmPlan(p, v, o, s.as_of);
       return { rank: i + 1, slug: p.slug, name: p.name, implied_value_usd: v.implied, value_band_usd: v.band, token_odds: o, expected_value_usd: Math.round(o * v.implied),
         class: x.cls, category: p.category, family: family(p.category), chains: p.chains, tvl_usd: p.tvl_usd, change_7d: p.change_7d, tokenless_days: v.age,
-        core_value_usd: v.core, factors: { base: r4(v.parts.base), size: r4(v.parts.size), family: r4(v.parts.family), category: r4(v.parts.category), momentum: v.momentum, runway: v.runway, class_factor: v.classFactor },
-        est_per_1k_usd: Math.round((plan.reward / plan.ticket) * 1e5) / 100, plan: plan,
-        farm_steps: plan.steps.map(function (t) { return t.do + '. Cost: ' + t.cost + '. Time: ' + t.time + '.'; }) };
+        core_value_usd: v.core, factors: { base: r4(v.parts.base), size: r4(v.parts.size), terms: r4(v.parts.terms), momentum: v.momentum, runway: v.runway, class_factor: v.classFactor },
+        plan: plan,
+        farm_steps: plan.steps.map(function (t) { return t.when + ': ' + t.do + '. Cost: ' + t.cost + '. Time: ' + t.time + '.'; }) };
     });
-    var core = cal.core, live = s.protocols.filter(hasToken).length, nullG = s.protocols.filter(function (p) { return !hasToken(p) && p.change_7d === null; }).length;
+    var core = cal.core, live = s.protocols.filter(hasToken).length;
     return {
-      model: K.MODEL, as_of: s.as_of, source: s.source, floor_usd: s.floor_usd, constants: K, rows: rows,
-      counts: { protocols: s.protocols.length, live: live, comps: cal.comps.length, comps_dropped: cal.dropped, tokenless: priced.length, board: rows.length, watch: s.watchlist.length,
-        watch_covered: rows.filter(function (r) { return watch[r.slug]; }).length, set_aside: aside.length, unknown_age: priced.filter(function (x) { return x.v.age === null; }).length, null_7d: nullG },
-      fit: { a: r4(core.a), b: r4(core.b), centre_tvl: Math.round(Math.exp(core.centre)), band: cal.band, unknown_age_days: cal.unknownAge,
-        families: FAMS.map(function (f) { return { family: f, comps: cal.comps.filter(function (c) { return c.family === f; }).length, effect: r4(Math.exp(core.famEffect(f))) }; }),
-        categories: Object.keys(cal.comps.reduce(function (m, c) { m[c.category] = 1; return m; }, {})).sort(cmp).map(function (c) { return { category: c, comps: cal.comps.filter(function (x) { return x.category === c; }).length, effect: r4(Math.exp(core.catEffect(c))) }; }) },
+      model: K.MODEL, as_of: s.as_of, source: s.source, floor_usd: s.floor_usd, constants: Object.assign({}, K), rows: rows,
+      counts: { protocols: s.protocols.length, live: live, comps: cal.comps.length, tokenless: priced.length, board: rows.length, watch: s.watchlist.length,
+        watch_covered: rows.filter(function (r) { return watch[r.slug]; }).length, set_aside: aside.length },
+      fit: { a: r4(core.a), b: r4(core.b), centre_tvl: Math.round(Math.exp(core.centre)), band: cal.band, unknown_age_days: cal.unknownAge, terms: cal.terms },
       test: cal.test, odds_test: odds.test,
       set_aside: aside.map(function (x) { return { slug: x.p.slug, name: x.p.name, category: x.p.category, tvl_usd: x.p.tvl_usd, change_7d: x.p.change_7d, reason: ruleFailure(x.p), implied_value_usd: x.v.implied }; }),
-      comps: cal.comps.map(function (c) { return { slug: c.slug, name: c.name, symbol: c.symbol, category: c.category, tvl_usd: c.tvl, mcap_usd: c.mcap, ratio: r4(c.ratio), members: c.members }; }),
     };
   }
 

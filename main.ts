@@ -16,6 +16,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, parseSnapshot, type BoardRow } from './lib/check.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
@@ -51,8 +52,11 @@ const issue = boardIssue(board, snapshot);
 if (issue) fail(`board would fail the gate: ${issue}`);
 
 mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${JSON.stringify({ model: radar.model, as_of: radar.as_of, rows: board })}\n`);
-const page = { ...radar, rows: radar.rows.map(({ farm_steps, ...r }: { farm_steps: string[] }) => r) };
+const boardText = `${JSON.stringify({ model: radar.model, as_of: radar.as_of, rows: board })}\n`;
+writeFileSync(join(out, 'board.json'), boardText);
+// The page shows these as self-checks: the program that wrote this output, and the board it wrote.
+const sha = (x: string | Buffer) => createHash('sha256').update(x).digest('hex');
+const page = { ...radar, main_sha256: sha(readFileSync(join(here, 'main.ts'))), board_sha256: sha(boardText), rows: radar.rows.map(({ farm_steps, ...r }: { farm_steps: string[] }) => r) };
 writeFileSync(join(out, 'data.js'), `window.RADAR=${JSON.stringify(page)};\nwindow.SNAPSHOT=${JSON.stringify(JSON.parse(snapshotText))};\n`);
 
 /** Copy the plain files of one directory, sorted, so the copy is the same every run. */
@@ -77,5 +81,6 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: 65_
 const c = radar.counts;
 const t = radar.test;
 process.stdout.write(`token radar ${radar.model}: ${c.protocols} protocols, ${c.live} with a token (${c.comps} priced comps), ${c.tokenless} tokenless; board ${c.board} rows (watchlist ${c.watch_covered}/${c.watch}), ${c.set_aside} set aside\n`);
-process.stdout.write(`held out: LOO rmse ${t.loo.model.rmse} (flat ${t.loo.flat.rmse}), walk-forward rmse ${t.walk_forward.model.rmse} (flat ${t.walk_forward.flat.rmse}); token odds AUC ${radar.odds_test.auc}\n`);
+const kept = t.steps.filter((x: any) => x.kept === true).pop();
+process.stdout.write(`held out: ${t.kept}/${t.tried} terms kept; LOO rmse ${kept.loo.rmse} (flat ${t.steps[0].loo.rmse}), newest-${t.split.test} test ${kept.test.rmse} (flat ${t.steps[0].test.rmse}); token odds AUC ${radar.odds_test.auc}\n`);
 process.stdout.write(`token radar: wrote board.json, data.js, dashboard/ (${pages.length} files), screenshots/ (${shots.length}) and dossier.json to ${out}\n`);

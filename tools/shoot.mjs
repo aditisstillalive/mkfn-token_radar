@@ -1,6 +1,6 @@
 // Capture the three dossier screenshots from the built dashboard (run main.ts into out/ first).
 //   PLAYWRIGHT=<path to the playwright package> node tools/shoot.mjs [out]
-// Each shot is a 1440x900 JPEG whose quality is searched so the file lands in 300-350 KB, the band the
+// Each shot is a JPEG whose quality is searched so the file lands in 300-350 KB, the band the
 // rules ask for (three images under the dossier cap, each well inside the gate's 512 KiB).
 import { createRequire } from 'node:module';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -16,9 +16,9 @@ const dest = resolve('screenshots');
 // The detail view is captured tall (1280x1440: long side 1440, short side over 800) so the value
 // build-up and the whole farm plan show in one image.
 const SHOTS = [
-  ['1-board.jpg', '#/board', 1440, 900],
+  ['1-board.jpg', '#/board', 1024, 1024], // the cover: KPIs, self-checks, term-by-term test, ledger, top rows
   ['2-detail.jpg', '#/board?sel=__farm', 1280, 1440], // the best-ranked row whose costed plan says farm
-  ['3-filtered.jpg', '#/board?cls=early&v=ok&sort=net&dir=desc&sel=__first', 1440, 900],
+  ['3-filtered.jpg', '#/board?cls=early&v=ok&dep=1000&sort=net&dir=desc&sel=__first', 1440, 900],
 ];
 const LO = 300_000, HI = 350_000;
 
