@@ -13,7 +13,7 @@
   R.rows.forEach(function (r) { bySlug[r.slug] = r; });
   var MAXV = R.rows[0].implied_value_usd, check = null;
 
-  // ---- formatting ---------------------------------------------------------------------------------
+  // ---- formatting
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function money(x) {
     if (x == null) return '–';
@@ -29,11 +29,11 @@
   function signed(x) { return (x >= 0 ? '+' : '') + money(x); }
   function fact(k, v) { return '<div class="fact"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>'; }
 
-  // ---- state in the hash --------------------------------------------------------------------------
+  // ---- state in the hash
   var st;
   function readHash() {
     var h = location.hash.replace(/^#\/?/, '').split('?'), p = new URLSearchParams(h[1] || '');
-    st = { tab: ['board', 'aside', 'model'].indexOf(h[0]) >= 0 ? h[0] : 'board', q: p.get('q') || '',
+    st = { tab: ['board', 'live', 'aside', 'model'].indexOf(h[0]) >= 0 ? h[0] : 'board', q: p.get('q') || '',
       cls: p.get('cls') ? p.get('cls').split(',').filter(function (c) { return CLS.indexOf(c) >= 0; }) : CLS.slice(),
       cat: p.get('cat') || '', chain: p.get('chain') || '', min: +p.get('min') || 0, grow: p.get('grow') === '1', v: p.get('v') || '',
       sort: p.get('sort') || 'rank', sel: p.get('sel') || '' };
@@ -49,11 +49,12 @@
     history.replaceState(null, '', '#/' + st.tab + (p.toString() ? '?' + p : ''));
   }
 
-  // ---- integrity strip: what was read, what is covered, what was left out, how the model tests ------
+  // ---- integrity strip: what was read, what is covered, what was left out, how the model tests
   function header() {
     document.getElementById('ver').textContent = R.model;
     document.getElementById('asof').textContent = 'Snapshot ' + R.as_of + ' · DefiLlama · offline';
     document.getElementById('n-aside').textContent = C.set_aside;
+    document.getElementById('n-live').textContent = C.live;
     var lo = T.loo, wf = T.walk_forward;
     var k = [
       ['Snapshot', R.as_of, C.protocols + ' protocols ≥ $5M TVL'],
@@ -76,9 +77,9 @@
       '). Walk-forward on the ' + wf.test + ' tokens tracked since ' + wf.cut_listed + ': ×' + wf.model.median_x.toFixed(1) + ' vs ×' + wf.flat.median_x.toFixed(1) + '. So each value carries an 80% band of ' + x3(R.fit.band[0]) + ' to ' + x3(R.fit.band[1]) + '. <a href="#/model">Model &amp; test</a></div>';
   }
 
-  // ---- board --------------------------------------------------------------------------------------
+  // ---- board
   var COLS = [['rank', '#', 'r'], ['name', 'Protocol'], ['class', 'Class', 'x2'], ['tvl_usd', 'TVL', 'r x2'], ['change_7d', '7d', 'r'], ['tokenless_days', 'No token for', 'r'],
-    ['implied_value_usd', 'Implied value', 'r'], ['token_odds', 'Token odds', 'r'], ['expected_value_usd', 'Expected', 'r x2'], ['net', 'Farm net', 'r']];
+    ['implied_value_usd', 'Implied value', 'r'], ['token_odds', 'Token odds', 'r'], ['expected_value_usd', 'Expected', 'r x2'], ['net', 'Farm plan, 90 d', 'r']];
   function sortVal(r, k) {
     if (k === 'net') return r.plan.net;
     if (k === 'name' || k === 'class') return String(r[k]).toLowerCase();
@@ -120,7 +121,7 @@
         '<td class="x2">' + badge(r.class) + '</td><td class="r num x2">' + money(r.tvl_usd) + '</td><td class="r num">' + pct(r.change_7d) + '</td><td class="r num">' + days(r.tokenless_days) + '</td>' +
         '<td class="r bar num"><b>' + money(r.implied_value_usd) + '</b><span style="width:' + Math.max(2, Math.sqrt(r.implied_value_usd / MAXV) * 100).toFixed(1) + '%"></span><em>' + money(r.value_band_usd[0]) + '–' + money(r.value_band_usd[1]) + '</em></td>' +
         '<td class="r num">' + odds(r.token_odds) + '</td><td class="r num x2">' + money(r.expected_value_usd) + '</td>' +
-        '<td class="r num">' + vchip(r) + ' ' + signed(r.plan.net) + '</td></tr>';
+        '<td class="r num fp">' + vchip(r) + ' ' + signed(r.plan.net) + '<em>' + money(r.plan.ticket) + ' in · cost ' + money(r.plan.costs.total) + ' · ' + r.plan.hours.toFixed(1) + ' h' + (r.plan.lockup_days ? ' · ' + r.plan.lockup_days + 'd lock' : '') + '</em></td></tr>';
     }).join('');
     app.innerHTML = testLine() + f + '<div class="split' + (sel ? ' has-sel' : ' solo') + '"><div class="tbl"><div class="scroll"><table><thead>' + head + '</thead><tbody>' +
       (body || '<tr><td colspan="10" class="empty">No protocol matches these filters.</td></tr>') + '</tbody></table></div></div>' + (sel ? detail(sel) : '') + '</div>';
@@ -178,15 +179,25 @@
     if (c) c.onclick = function () { st.sel = ''; go(); };
   }
 
-  // ---- set aside ----------------------------------------------------------------------------------
+  // ---- set aside
   function aside() {
-    app.innerHTML = '<div class="prose"><p>These ' + C.set_aside + ' protocols record no token on DefiLlama but fail the watchlist\'s own rule: a CEX\'s reserve wallets, a staking or bridged wrapper, or a versioned product. Their value already trades as another token, so they stay off the ranked board; the reference value applies a class factor of ' + R.constants.DERIVATIVE + '. The ' + C.live + ' protocols that record a token are not candidates either: ' + C.comps + ' of their tokens price the model, ' + C.comps_dropped + ' are left out (no market cap, or a CEX, bridge or wrapper).</p></div>' +
+    app.innerHTML = '<div class="prose"><p>These ' + C.set_aside + ' protocols record no token on DefiLlama but fail the watchlist\'s own rule: a CEX\'s reserve wallets, a staking or bridged wrapper, or a versioned product. Their value already trades as another token, so they stay off the ranked board; the reference value applies a class factor of ' + R.constants.DERIVATIVE + '. Protocols that record a token are listed under <a href="#/live">Token trades</a>.</p></div>' +
       '<div class="tbl"><div class="scroll"><table><thead><tr><th>Protocol</th><th>Category</th><th>Why set aside</th><th class="r">TVL</th><th class="r">7d</th><th class="r">Reference value</th></tr></thead><tbody>' +
       R.set_aside.map(function (r) { return '<tr><td class="nm">' + esc(r.name) + '</td><td class="sub">' + esc(r.category || '–') + '</td><td>' + esc(r.reason) + '</td><td class="r num">' + money(r.tvl_usd) + '</td><td class="r num">' + pct(r.change_7d) + '</td><td class="r num sub">' + money(r.implied_value_usd) + '</td></tr>'; }).join('') +
       '</tbody></table></div></div>';
   }
 
-  // ---- model and its tests ------------------------------------------------------------------------
+  // ---- already trading: off the board, and the source of the comps
+  function live() {
+    var comp = {}, L = window.SNAPSHOT.protocols.filter(function (p) { return p.gecko_id !== null || p.symbol !== null; }).sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
+    R.comps.forEach(function (c) { comp[c.slug] = 1; });
+    app.innerHTML = '<div class="prose"><p>These ' + L.length + ' protocols record a token on DefiLlama, so they are not on the board: the launch is past. ' + C.comps + ' tokens, one per token, price the value model (marked); ' + C.comps_dropped + ' are left out (no market cap, or a CEX, bridge or wrapper).</p></div>' +
+      '<div class="tbl"><div class="scroll"><table><thead><tr><th>Protocol</th><th>Token</th><th>Category</th><th class="r">TVL</th><th class="r">Mcap</th><th>Comp</th></tr></thead><tbody>' +
+      L.map(function (p) { return '<tr><td class="nm">' + esc(p.name) + '</td><td class="num">' + esc(p.symbol || p.gecko_id) + '</td><td class="sub">' + esc(p.category || '–') + '</td><td class="r num">' + money(p.tvl_usd) + '</td><td class="r num">' + money(p.mcap_usd) + '</td><td>' + (comp[p.slug] ? '✓' : '') + '</td></tr>'; }).join('') +
+      '</tbody></table></div></div>';
+  }
+
+  // ---- model and its tests
   function scatter() { // leave-one-out prediction against the actual market cap, both on log scales
     var pts = T.points, lo = Infinity, hi = -Infinity, W = 460, P = 34;
     pts.forEach(function (p) { lo = Math.min(lo, p[1], p[2]); hi = Math.max(hi, p[1], p[2]); });
@@ -218,16 +229,14 @@
       '<p class="note">Reading it: a fitted size curve beats one flat multiple by a clear margin both ways. Family and category effects add rank skill in leave-one-out (' + T.loo.model.spearman.toFixed(2) + ' vs ' + T.loo.size_only.spearman.toFixed(2) + ') but not on the newest tokens, so they are kept heavily shrunk. The momentum and runway priors cost little held out. Misses are wide (one token in two is off by more than 3×), which is why every value shows its 80% band.</p>' +
       '<h3>Token odds, ' + O.folds + '-fold cross-validated</h3><table class="mini"><tbody><tr><td>AUC (0.5 is a coin)</td><td class="r num">' + O.auc.toFixed(3) + '</td></tr><tr><td>Log-loss, model vs base rate ' + odds(O.base_rate) + '</td><td class="r num">' + O.log_loss.toFixed(3) + ' vs ' + O.base_log_loss.toFixed(3) + '</td></tr></tbody></table>' +
       '<h3>Penalty grid (LOO ln-RMSE, family λ × category λ)</h3><div class="grid4">' + T.grid.map(function (g) { return '<span' + (g.lf === T.chosen.family_lambda && g.lc === T.chosen.category_lambda ? ' class="on"' : '') + '>' + g.lf + '/' + g.lc + ' <b>' + g.rmse.toFixed(3) + '</b></span>'; }).join('') + '</div></div>' +
-      '<div><h3>Predicted with the token held out vs actual (dashed: 3×)</h3>' + scatter() + '<h3>Trading comps</h3><div class="tbl"><div class="scroll" style="max-height:300px"><table><thead><tr><th>Token</th><th>Category</th><th class="r">TVL</th><th class="r">Mcap</th><th class="r">×TVL</th></tr></thead><tbody>' +
-      R.comps.map(function (c) { return '<tr><td><span class="nm">' + esc(c.name) + '</span> <span class="sub">' + esc(c.symbol || '') + (c.members > 1 ? ' · ' + c.members + ' products' : '') + '</span></td><td class="sub">' + esc(c.category) + '</td><td class="r num">' + money(c.tvl_usd) + '</td><td class="r num">' + money(c.mcap_usd) + '</td><td class="r num">' + c.ratio.toFixed(3) + '</td></tr>'; }).join('') +
-      '</tbody></table></div></div></div></div>';
+      '<div><h3>Predicted with the token held out vs actual (dashed: 3×)</h3>' + scatter() + '<p class="note">The tokens that price the fit are marked under <a href="#/live">Token trades</a>.</p></div></div>';
   }
 
-  // ---- router and the in-browser recompute ----------------------------------------------------------
+  // ---- router and the in-browser recompute
   function go() { writeHash(); render(); }
   function render() {
     document.querySelectorAll('[data-tab]').forEach(function (a) { a.setAttribute('aria-selected', String(a.getAttribute('data-tab') === st.tab)); });
-    if (st.tab === 'aside') aside(); else if (st.tab === 'model') model(); else board();
+    if (st.tab === 'aside') aside(); else if (st.tab === 'live') live(); else if (st.tab === 'model') model(); else board();
   }
   window.addEventListener('hashchange', function () { readHash(); render(); });
   readHash();

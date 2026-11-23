@@ -32,8 +32,9 @@ for (const [name, hash, w, h] of SHOTS) {
   await page.goto(page0 + hash.replace(/[?&]sel=__\w+/, ''));
   await page.waitForSelector('body[data-checked]'); // the in-browser recompute has finished
   if (hash.includes('__first')) await page.click('tbody tr[data-slug]');
-  if (hash.includes('__farm')) await page.click(`tr[data-slug="${await page.evaluate(() => window.RADAR.rows.find((r) => r.plan.verdict === 'farm').slug)}"]`);
+  if (hash.includes('__farm')) await page.click(`tr[data-slug="${await page.evaluate(() => window.RADAR.rows.find((r) => r.plan.verdict === 'farm' && Math.abs(r.change_7d) >= 10).slug)}"]`);
   await page.waitForTimeout(150);
+  await page.evaluate(() => scrollTo(0, 0)); // keep the header and integrity strip in frame
   let lo = 40, hi = 100, best = null;
   while (lo <= hi) {
     const q = (lo + hi) >> 1;

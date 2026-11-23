@@ -16,7 +16,7 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
   - walk-forward (fit on the tokens DefiLlama tracked first, test on the newest third): 1.97, against 2.19 for a flat multiple. Size alone does better here, at 1.88.
 
   The leave-one-out residuals set each row's 80% value band.
-- **Momentum and runway** are stated priors: the 7-day TVL change, and the days run with no token.
+- **Momentum and runway** are stated priors: the 7-day TVL change, and the days run with no token. Fitted as slopes on the trading tokens instead, leave-one-out shrank both to about zero, so they stay stated, and the test shows the priors cost little held out.
 - **Class.** Watchlist and early rows count in full. Rows that have a parent are cut to 0.35. Wrapped, staked, bridged and CEX products are set aside off the board.
 - **Token odds.** A logistic fit of "carries a token" on size, age, chains and family. Its 5-fold cross-validated AUC is 0.72. Expected value is the odds times the implied value.
 
@@ -29,7 +29,7 @@ No protocol name appears in the code.
 
 It also checks break-even: the drop if a token launches, times the odds, against the costs. That gives a verdict of farm, marginal or skip.
 
-**Dashboard.** A sortable, filterable board covering 198 tokenless candidates and all 40 watchlist protocols. It has an integrity strip (snapshot, coverage, exclusions, test scores, in-browser recompute) and a detail view with the value build-up, the cost table and the steps. It also has a set-aside list and a model & test page with a held-out scatter. It runs with no network.
+**Dashboard.** A sortable, filterable board covering 198 tokenless candidates and all 40 watchlist protocols. Every row carries its farm plan in brief: verdict, net, ticket, cost, hours and lockup. It has an integrity strip (snapshot, coverage, exclusions, test scores, in-browser recompute) and a detail view with the value build-up, the cost table and the steps. Other tabs list the 416 protocols whose token already trades (the 92 that price the model marked), the set-aside derivatives, and the model and its tests with a held-out scatter. It runs with no network.
 
 ## Run it
 

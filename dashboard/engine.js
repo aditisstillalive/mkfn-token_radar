@@ -63,7 +63,7 @@
   function quantile(xs, q) { var s = xs.slice().sort(function (a, b) { return a - b; }); return s.length ? s[Math.min(s.length - 1, Math.floor(q * s.length))] : 0; }
   function median(xs) { return quantile(xs, 0.5); }
 
-  // ---- linear algebra: a d x d inverse by Gauss-Jordan with partial pivoting ------------------------
+  // ---- linear algebra: a d x d inverse by Gauss-Jordan with partial pivoting
   function inverse(A) {
     var d = A.length, M = A.map(function (r, i) { return r.concat(r.map(function (_, j) { return i === j ? 1 : 0; })); });
     for (var c = 0; c < d; c++) {
@@ -87,7 +87,7 @@
     return { w: w, h: h };
   }
 
-  // ---- comps: one per trading token ---------------------------------------------------------------
+  // ---- comps: one per trading token
   /** DefiLlama gives every product of a token the token's whole market cap, so products sharing a
    *  CoinGecko id (or symbol) are merged and their TVL summed. A token whose largest product fails the
    *  watchlist rule (a CEX, a bridge, a staking wrapper) prices an exchange or a base asset: dropped. */
@@ -111,7 +111,7 @@
     return { comps: comps.sort(function (a, b) { return b.mcap - a.mcap || cmp(a.slug, b.slug); }), dropped: dropped };
   }
 
-  // ---- the fitted core: ln mcap = a + b (ln TVL - centre) + family + category ----------------------
+  // ---- the fitted core: ln mcap = a + b (ln TVL - centre) + family + category
   function lnTarget(c) { return Math.log(c.tvl * clamp(c.ratio, K.RATIO_MIN, K.RATIO_MAX)); }
   function fitCore(train, lf, lc) {
     var cats = [], centre = train.reduce(function (a, c) { return a + Math.log(c.tvl); }, 0) / train.length;
@@ -160,8 +160,8 @@
     var wf = fitCore(train, best.lf, best.lc), wfFlat = flat(train);
     var wfSize = fitCore(train.map(function (c) { return Object.assign({}, c, { category: 'Uncategorised' }); }), 1e6, 1e6);
     var tAct = test.map(lnTarget);
-    // The momentum and runway priors are not fitted (a comp's age is not tokenless age); this checks
-    // that applying them to the comps does not worsen the out-of-sample error much.
+    // Momentum and runway are stated priors: fitted as slopes on the comps (7d change, days tracked),
+    // leave-one-out shrank both to ~0. This checks that applying the priors costs little held out.
     var withPriors = core.loo.map(function (x, i) { var c = comps[i], a = ageDays(s.as_of, c.listed_at); return x + Math.log(momentum(c.change_7d)) + Math.log(runway(a === null ? 0 : a)); });
     var resid = core.loo.map(function (x, i) { return act[i] - x; });
     var ages = s.protocols.filter(function (p) { return !hasToken(p); }).map(function (p) { return ageDays(s.as_of, p.listed_at); }).filter(function (a) { return a !== null; });
@@ -184,7 +184,7 @@
   function momentum(g) { return 1 + clamp(g === null || g === undefined ? 0 : g, K.GROWTH_FLOOR, K.GROWTH_CAP) / 100; }
   function runway(age) { return K.RUNWAY_FLOOR + K.RUNWAY_RANGE * (1 - Math.exp(-age / K.RUNWAY_TAU)); }
 
-  // ---- token odds: a logistic fit of "carries a token" on the protocol's profile --------------------
+  // ---- token odds: a logistic fit of "carries a token" on the protocol's profile
   function oddsModel(s, unknownAge) {
     var pop = s.protocols.filter(function (p) { return !ruleFailure(p) && p.tvl_usd > 0; });
     var centre = pop.reduce(function (a, p) { return a + Math.log(p.tvl_usd); }, 0) / pop.length;
@@ -219,7 +219,7 @@
         log_loss: r4(cv.reduce(function (a, c) { return a + ll(c[0], c[1]); }, 0) / cv.length), base_log_loss: r4(cv.reduce(function (a, c) { return a + ll(base, c[1]); }, 0) / cv.length) } };
   }
 
-  // ---- valuation -----------------------------------------------------------------------------------
+  // ---- valuation
   function classify(p, s, watch) {
     if (watch[p.slug]) return 'watch';
     if (ruleFailure(p)) return 'derivative';
@@ -235,7 +235,7 @@
       band: [Math.round(implied * cal.band[0]), Math.round(implied * cal.band[1])] };
   }
 
-  // ---- farm plans: steps with capital, gas and bridge, lockup, risk and break-even -------------------
+  // ---- farm plans: steps with capital, gas and bridge, lockup, risk and break-even
   var GAS = { Ethereum: 4, Bitcoin: 3, Tron: 1.5, Algorand: 0.01, Solana: 0.01, Sui: 0.02, Aptos: 0.01, Base: 0.05, Arbitrum: 0.08, Optimism: 0.05, Binance: 0.08,
     Polygon: 0.02, Avalanche: 0.1, Monad: 0.03, Sonic: 0.02, Hyperliquid: 0.02, 'Hyperliquid L1': 0.02, Ink: 0.03, Plasma: 0.01, Berachain: 0.05, Stellar: 0.01,
     Ripple: 0.01, Flare: 0.02, Katana: 0.03, Unichain: 0.03, Linea: 0.06, Scroll: 0.06, Mantle: 0.04, TON: 0.03, Starknet: 0.04, Near: 0.01, Cardano: 0.2, Noble: 0.02 };
@@ -282,7 +282,7 @@
       hours: r4((15 + a[4] + 10 + 20 + 5 * weeks + 15 + 2) / 60), steps: steps };
   }
 
-  // ---- the board ----------------------------------------------------------------------------------
+  // ---- the board
   function build(s) {
     var cal = calibrate(s), odds = oddsModel(s, cal.unknownAge), watch = {};
     s.watchlist.forEach(function (w) { watch[w] = true; });
