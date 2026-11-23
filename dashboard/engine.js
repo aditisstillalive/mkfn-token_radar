@@ -3,18 +3,20 @@
 // so the screenshots show what this code computes. Plain script, no imports, no network, no names.
 //
 //   implied value  = fitted core value x momentum x runway x class                (value if it launches)
-//   core value     = exp(a + b ln TVL + family effect + category effect)   ridge fit on trading tokens
+//   core value     = exp(a + b ln TVL + w (family + category effects))   ridge fits on trading tokens
 //   token odds     = logistic(size, age, chains, family)            share of look-alikes carrying a token
 //   expected value = token odds x implied value
 //
 // The core is fitted on the snapshot's own trading tokens and scored out of sample two ways: exact
 // leave-one-out, and walk-forward (fit on the tokens DefiLlama tracked first, test on the newest third),
-// each against two baselines. Its penalties are chosen by that leave-one-out score, not by hand.
+// each against two baselines. Penalties are chosen by leave-one-out; w, the weight on the full fit against
+// size alone, by a validation fold inside the walk-forward training set, so the newest third is scored once.
 (function (root) {
   'use strict';
 
   var K = {
-    MODEL: 'fit-v3',
+    MODEL: 'fit-v4',
+    BLEND: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1], // weights w tried on the validation fold
     LAMBDAS: [1, 3, 10, 30], // ridge penalties tried for the family and the category effects
     RATIO_MIN: 0.01, RATIO_MAX: 25, // a comp's mcap/TVL is clamped here before the log (leverage cap)
     GROWTH_FLOOR: -50, GROWTH_CAP: 60, // momentum prior: (1 + clamped 7d change)^1
@@ -132,6 +134,23 @@
       loo: X.map(function (x, i) { return y[i] - (y[i] - dot(w, x)) / (1 - fit.h[i]); }), // exact LOO prediction
     };
   }
+  function plain(xs) { return xs.map(function (c) { return Object.assign({}, c, { category: 'Uncategorised' }); }); }
+  function rmseOf(f, xs) { return Math.sqrt(xs.reduce(function (a, c) { var e = lnTarget(c) - f.predict(c.category, c.tvl); return a + e * e; }, 0) / xs.length); }
+  function byDate(xs) { var d = xs.slice().sort(function (a, b) { return cmp(a.listed_at || '0000', b.listed_at || '0000') || cmp(a.slug, b.slug); }), k = Math.floor((d.length * 2) / 3); return [d.slice(0, k), d.slice(k)]; }
+  /** Full fit with its penalties chosen by exact leave-one-out on xs. */
+  function bestFit(xs) {
+    var act = xs.map(lnTarget), grid = [];
+    K.LAMBDAS.forEach(function (lf) { K.LAMBDAS.forEach(function (lc) { var f = fitCore(xs, lf, lc); grid.push({ lf: lf, lc: lc, fit: f, s: score(f.loo, act) }); }); });
+    return { grid: grid, best: grid.slice().sort(function (a, b) { return a.s.rmse - b.s.rmse || a.lf - b.lf || a.lc - b.lc; })[0] };
+  }
+  /** w x full fit + (1 - w) x size alone, in ln: the family and category effects shrunk by w toward size. */
+  function blend(xs, w) {
+    var F = bestFit(xs), f = F.best.fit, z = fitCore(plain(xs), 1e6, 1e6);
+    return { F: F, full: f, size: z, w: w, centre: f.centre, a: w * f.a + (1 - w) * z.a, b: w * f.b + (1 - w) * z.b,
+      famEffect: function (x) { return w * f.famEffect(x); }, catEffect: function (x) { return w * f.catEffect(x); },
+      predict: function (c, t) { return w * f.predict(c, t) + (1 - w) * z.predict('Uncategorised', t); },
+      loo: f.loo.map(function (x, i) { return w * x + (1 - w) * z.loo[i]; }) };
+  }
   /** Out-of-sample scores of predictions (ln) against actual ln market caps. */
   function score(pred, act) {
     var e = pred.map(function (p, i) { return act[i] - p; }), ae = e.map(Math.abs);
@@ -146,20 +165,17 @@
 
   function calibrate(s) {
     var built = buildComps(s), comps = built.comps, act = comps.map(lnTarget);
-    // Penalties: every pair on the grid, scored by exact leave-one-out RMSE; the best pair is kept.
-    var grid = [];
-    K.LAMBDAS.forEach(function (lf) { K.LAMBDAS.forEach(function (lc) { var f = fitCore(comps, lf, lc); grid.push({ lf: lf, lc: lc, fit: f, s: score(f.loo, act) }); }); });
-    var best = grid.slice().sort(function (a, b) { return a.s.rmse - b.s.rmse || a.lf - b.lf || a.lc - b.lc; })[0], core = best.fit;
-    // Baselines under the same leave-one-out: a flat multiple, and size alone (no family or category).
+    // Walk-forward: train on the tokens DefiLlama tracked first (two thirds), test on the newest third.
+    // Inside train the same split again: fit on its older part, pick w on its newer part (validation).
+    var tt = byDate(comps), train = tt[0], test = tt[1], fv = byDate(train);
+    var val = K.BLEND.map(function (w) { return { w: w, rmse: r4(rmseOf(blend(fv[0], w), fv[1])) }; });
+    var w = val.slice().sort(function (a, b) { return a.rmse - b.rmse || a.w - b.w; })[0].w;
+    // The board: penalties by leave-one-out on every comp, w as validated. Baselines under the same LOO.
+    var core = blend(comps, w), best = core.F.best;
     var tot = act.reduce(function (a, x, i) { return a + x - Math.log(comps[i].tvl); }, 0);
     var flatLoo = comps.map(function (c, i) { return Math.log(c.tvl) + (tot - (act[i] - Math.log(c.tvl))) / (comps.length - 1); });
-    var sizeOnly = fitCore(comps.map(function (c) { return Object.assign({}, c, { category: 'Uncategorised' }); }), 1e6, 1e6);
-    // Walk-forward: fit on the tokens DefiLlama tracked first (two thirds), predict the newest third.
-    var byDate = comps.slice().sort(function (a, b) { return cmp(a.listed_at || '0000', b.listed_at || '0000') || cmp(a.slug, b.slug); });
-    var cut = Math.floor((byDate.length * 2) / 3), train = byDate.slice(0, cut), test = byDate.slice(cut);
-    var wf = fitCore(train, best.lf, best.lc), wfFlat = flat(train);
-    var wfSize = fitCore(train.map(function (c) { return Object.assign({}, c, { category: 'Uncategorised' }); }), 1e6, 1e6);
-    var tAct = test.map(lnTarget);
+    var wf = blend(train, w), wfFlat = flat(train), tAct = test.map(lnTarget);
+    var on = function (f, z) { return score(test.map(function (c) { return f.predict(z ? 'Uncategorised' : c.category, c.tvl); }), tAct); };
     // Momentum and runway are stated priors: fitted as slopes on the comps (7d change, days tracked),
     // leave-one-out shrank both to ~0. This checks that applying the priors costs little held out.
     var withPriors = core.loo.map(function (x, i) { var c = comps[i], a = ageDays(s.as_of, c.listed_at); return x + Math.log(momentum(c.change_7d)) + Math.log(runway(a === null ? 0 : a)); });
@@ -169,13 +185,11 @@
       comps: comps, dropped: built.dropped, core: core, unknownAge: Math.round(median(ages)),
       band: [r4(Math.exp(quantile(resid, 0.1))), r4(Math.exp(quantile(resid, 0.9)))],
       test: {
-        chosen: { family_lambda: best.lf, category_lambda: best.lc },
-        grid: grid.map(function (g) { return { lf: g.lf, lc: g.lc, rmse: g.s.rmse }; }),
-        loo: { model: score(core.loo, act), size_only: score(sizeOnly.loo, act), flat: score(flatLoo, act), with_priors: score(withPriors, act) },
-        walk_forward: { train: train.length, test: test.length, cut_listed: test.length ? test[0].listed_at : null,
-          model: score(test.map(function (c) { return wf.predict(c.category, c.tvl); }), tAct),
-          size_only: score(test.map(function (c) { return wfSize.predict('Uncategorised', c.tvl); }), tAct),
-          flat: score(test.map(wfFlat), tAct) },
+        chosen: { family_lambda: best.lf, category_lambda: best.lc, w: w },
+        validation: { fit: fv[0].length, val: fv[1].length, from: fv[1][0].listed_at, curve: val },
+        loo: { model: score(core.loo, act), size_only: score(core.size.loo, act), full: score(core.full.loo, act), flat: score(flatLoo, act), with_priors: score(withPriors, act) },
+        walk_forward: { train: train.length, test: test.length, cut_listed: test[0].listed_at,
+          model: on(wf), size_only: on(wf.size, 1), full: on(wf.full), flat: score(test.map(wfFlat), tAct) },
         points: comps.map(function (c, i) { return [c.slug, r4(act[i]), r4(core.loo[i])]; }),
       },
     };

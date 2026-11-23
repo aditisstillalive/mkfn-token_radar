@@ -62,7 +62,7 @@
       ['Ranked board', C.board, R.rows.filter(function (r) { return r.class === 'early'; }).length + ' early finds below the floor'],
       ['Excluded', C.live + ' + ' + C.set_aside, 'trade a token · derivative of one'],
       ['Held-out value test', lo.model.rmse.toFixed(2) + ' <small>vs ' + lo.flat.rmse.toFixed(2) + '</small>', 'LOO ln-RMSE, model vs flat multiple', lo.model.rmse < lo.flat.rmse],
-      ['Walk-forward', wf.model.rmse.toFixed(2) + ' <small>vs ' + wf.flat.rmse.toFixed(2) + '</small>', wf.test + ' newest tokens, fit on ' + wf.train + ' older', wf.model.rmse < wf.flat.rmse],
+      ['Walk-forward', wf.model.rmse.toFixed(2) + ' <small>vs size ' + wf.size_only.rmse.toFixed(2) + '</small>', wf.test + ' newest tokens, scored once · flat ' + wf.flat.rmse.toFixed(2), wf.model.rmse < wf.size_only.rmse],
       ['Token odds test', 'AUC ' + O.auc.toFixed(2), O.folds + '-fold CV · log-loss ' + O.log_loss.toFixed(3) + ' vs ' + O.base_log_loss.toFixed(3)],
       ['Recomputed here', check ? check.ok + ' / ' + C.board : '…', check ? 'rows match engine.js · ' + check.ms + ' ms' : 'running engine.js in this browser', check && check.ok === C.board],
     ];
@@ -71,10 +71,9 @@
     }).join('');
   }
   function testLine() {
-    var lo = T.loo, wf = T.walk_forward;
-    return '<div class="test"><b>Held-out test</b> Each of ' + lo.model.n + ' trading tokens priced by a fit that never saw it: median miss ×' + lo.model.median_x.toFixed(1) +
-      ', ' + Math.round(lo.model.within_3x * 100) + '% within 3×, rank corr ' + lo.model.spearman.toFixed(2) + ' (flat multiple: ×' + lo.flat.median_x.toFixed(1) + ', ' + Math.round(lo.flat.within_3x * 100) + '%, ' + lo.flat.spearman.toFixed(2) +
-      '). Walk-forward on the ' + wf.test + ' tokens tracked since ' + wf.cut_listed + ': ×' + wf.model.median_x.toFixed(1) + ' vs ×' + wf.flat.median_x.toFixed(1) + '. So each value carries an 80% band of ' + x3(R.fit.band[0]) + ' to ' + x3(R.fit.band[1]) + '. <a href="#/model">Model &amp; test</a></div>';
+    var lo = T.loo, wf = T.walk_forward, w = T.chosen.w, V = T.validation;
+    return '<div class="test"><b>Held-out test</b> Size dominates. Core = size curve + ' + w + ' × the family and category effects; ' + w + ' was picked on a validation fold (' + V.val + ' tokens tracked from ' + V.from + '), then the ' + wf.test + ' newest (since ' + wf.cut_listed + ') were scored once: ln-RMSE ' +
+      wf.model.rmse.toFixed(2) + ', size alone ' + wf.size_only.rmse.toFixed(2) + ', full effects ' + wf.full.rmse.toFixed(2) + ', flat multiple ' + wf.flat.rmse.toFixed(2) + '. Size alone still edges it on the newest tokens; the effects only adjust within a size band. Leave-one-out ' + lo.model.rmse.toFixed(2) + ' (size ' + lo.size_only.rmse.toFixed(2) + '). 80% band ' + x3(R.fit.band[0]) + ' to ' + x3(R.fit.band[1]) + '. <a href="#/model">Model &amp; tests</a></div>';
   }
 
   // ---- board
@@ -211,24 +210,24 @@
       '<text x="' + W / 2 + '" y="' + (W - 2) + '">actual market cap</text><text transform="translate(10 ' + W / 2 + ') rotate(-90)">predicted, token held out</text></svg>';
   }
   function scoreRows(t) {
-    return [['This model', t.model], ['Size only', t.size_only], ['Flat multiple', t.flat]].concat(t.with_priors ? [['Model × priors', t.with_priors]] : []).map(function (x) {
+    return [['Shipped (size + ' + T.chosen.w + ' × effects)', t.model], ['Size only', t.size_only], ['Full effects', t.full], ['Flat multiple', t.flat]].concat(t.with_priors ? [['Model × priors', t.with_priors]] : []).map(function (x) {
       return '<tr><td>' + x[0] + '</td><td class="r num">' + x[1].rmse.toFixed(3) + '</td><td class="r num">×' + x[1].median_x.toFixed(2) + '</td><td class="r num">' + Math.round(x[1].within_3x * 100) + '%</td><td class="r num">' + x[1].spearman.toFixed(2) + '</td></tr>';
     }).join('');
   }
   function model() {
     var K = R.constants, F = R.fit, H = '<tr><th></th><th class="r">ln-RMSE</th><th class="r">Median miss</th><th class="r">Within 3×</th><th class="r">Rank corr</th></tr>';
     app.innerHTML = '<div class="prose"><p>What would each protocol\'s token be worth if its record stayed as the snapshot shows it, and how likely is a token at all? Both answers are fitted on the snapshot\'s own protocols in <code>engine.js</code> and scored on data the fit did not see. No protocol is named in the code.</p>' +
-      '<div class="formula">implied = core × momentum × runway × class<br>core: ln mcap = ' + F.a.toFixed(2) + ' + ' + F.b.toFixed(3) + ' × (ln TVL − ln ' + money(F.centre_tvl) + ') + family + category, ridge λ ' + T.chosen.family_lambda + ' / ' + T.chosen.category_lambda + ' chosen by leave-one-out<br>' +
+      '<div class="formula">implied = core × momentum × runway × class<br>core: ln mcap = ' + F.a.toFixed(2) + ' + ' + F.b.toFixed(3) + ' × (ln TVL − ln ' + money(F.centre_tvl) + ') + ' + T.chosen.w + ' × (family + category), ridge λ ' + T.chosen.family_lambda + ' / ' + T.chosen.category_lambda + ' by leave-one-out, ' + T.chosen.w + ' on the validation fold<br>' +
       'families: ' + F.families.map(function (f) { return esc(f.family) + ' ' + x3(f.effect) + ' (' + f.comps + ')'; }).join(' · ') + '<br>' +
       'momentum = 1 + clamp(7d, ' + K.GROWTH_FLOOR + '%, +' + K.GROWTH_CAP + '%) · runway = ' + K.RUNWAY_FLOOR + ' + ' + K.RUNWAY_RANGE + '(1 − e^(−days/' + K.RUNWAY_TAU + ')), unknown age ' + F.unknown_age_days + ' d<br>' +
       'class = 1 watchlist or early · ' + K.PARENTED + ' parented · ' + K.DERIVATIVE + ' derivative (set aside)<br>' +
       'token odds = logistic(ln TVL, ln(1 + years tracked), ln chains, family), ridge ' + K.ODDS_LAMBDA + ', fitted on ' + O.n + ' protocols (' + O.with_token + ' carry a token)<br>' +
       'drop on a ticket = implied / ' + K.LAUNCH_FLOAT + ' float × ' + K.AIRDROP_SHARE + ' to farmers × ' + K.FARM_DAYS + '/' + K.SEASON_DAYS + ' days × ticket / TVL</div></div>' +
       '<div class="cols"><div><h3>Value model, held out</h3><table class="mini"><thead><tr><th colspan="5">Leave-one-out, ' + T.loo.model.n + ' tokens (exact, hat-matrix)</th></tr>' + H + '</thead><tbody>' + scoreRows(T.loo) + '</tbody></table>' +
-      '<table class="mini"><thead><tr><th colspan="5">Walk-forward: fit on ' + T.walk_forward.train + ' tokens tracked first, test the ' + T.walk_forward.test + ' since ' + T.walk_forward.cut_listed + '</th></tr>' + H + '</thead><tbody>' + scoreRows(T.walk_forward) + '</tbody></table>' +
-      '<p class="note">Reading it: a fitted size curve beats one flat multiple by a clear margin both ways. Family and category effects add rank skill in leave-one-out (' + T.loo.model.spearman.toFixed(2) + ' vs ' + T.loo.size_only.spearman.toFixed(2) + ') but not on the newest tokens, so they are kept heavily shrunk. The momentum and runway priors cost little held out. Misses are wide (one token in two is off by more than 3×), which is why every value shows its 80% band.</p>' +
+      '<table class="mini"><thead><tr><th colspan="5">Walk-forward: fit on ' + T.walk_forward.train + ' tokens tracked first, score the ' + T.walk_forward.test + ' since ' + T.walk_forward.cut_listed + ' once</th></tr>' + H + '</thead><tbody>' + scoreRows(T.walk_forward) + '</tbody></table>' +
+      '<p class="note">Reading it: size dominates. A fitted size curve beats one flat multiple by a clear margin both ways. Family and category effects add rank skill in leave-one-out (' + T.loo.full.spearman.toFixed(2) + ' vs ' + T.loo.size_only.spearman.toFixed(2) + ') but the newer tokens price richer than older look-alikes, so full effects lose walk-forward; the validated blend keeps ' + T.chosen.w + ' of them and size alone still edges it there. The momentum and runway priors cost little held out. Misses are wide (one token in two is off by more than 3×), which is why every value shows its 80% band.</p>' +
       '<h3>Token odds, ' + O.folds + '-fold cross-validated</h3><table class="mini"><tbody><tr><td>AUC (0.5 is a coin)</td><td class="r num">' + O.auc.toFixed(3) + '</td></tr><tr><td>Log-loss, model vs base rate ' + odds(O.base_rate) + '</td><td class="r num">' + O.log_loss.toFixed(3) + ' vs ' + O.base_log_loss.toFixed(3) + '</td></tr></tbody></table>' +
-      '<h3>Penalty grid (LOO ln-RMSE, family λ × category λ)</h3><div class="grid4">' + T.grid.map(function (g) { return '<span' + (g.lf === T.chosen.family_lambda && g.lc === T.chosen.category_lambda ? ' class="on"' : '') + '>' + g.lf + '/' + g.lc + ' <b>' + g.rmse.toFixed(3) + '</b></span>'; }).join('') + '</div></div>' +
+      '<h3>Weight w on the effects, chosen on validation (fit ' + T.validation.fit + ' oldest, score the next ' + T.validation.val + '; test untouched)</h3><div class="grid4">' + T.validation.curve.map(function (g) { return '<span' + (g.w === T.chosen.w ? ' class="on"' : '') + '>w ' + g.w + ' <b>' + g.rmse.toFixed(3) + '</b></span>'; }).join('') + '</div></div>' +
       '<div><h3>Predicted with the token held out vs actual (dashed: 3×)</h3>' + scatter() + '<p class="note">The tokens that price the fit are marked under <a href="#/live">Token trades</a>.</p></div></div>';
   }
 

@@ -8,14 +8,19 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
 
 **One engine, read by the judge.** The whole model lives in `dashboard/engine.js`. `main.ts` runs it to write `board.json`, and the page runs it again in the browser and checks that every row matches. Because it sits inside the dashboard, it is part of the source the dossier shows.
 
-**Value model (`fit-v3`).** `implied = core × momentum × runway × class`
+**Value model (`fit-v4`).** `implied = core × momentum × runway × class`
 
-- **Core.** A ridge regression of ln market cap on ln TVL, with family and category effects, fitted on the snapshot's own trading tokens (one comp per token). The penalties are chosen by exact leave-one-out error.
-- **Held-out tests,** shown on the board:
-  - leave-one-out: ln-RMSE 1.73, against 1.94 for a flat multiple and 1.76 for size alone;
-  - walk-forward (fit on the tokens DefiLlama tracked first, test on the newest third): 1.97, against 2.19 for a flat multiple. Size alone does better here, at 1.88.
+- **Core: size dominates.** `ln mcap = size curve + w × (family + category effects)`. The size curve is ln market cap on ln TVL, and the effects come from a ridge fit on the snapshot's own trading tokens (one comp per token), with penalties chosen by exact leave-one-out. The weight w shrinks the effects toward size alone.
+- **How w was chosen.** Sort the 92 comps by when DefiLlama began tracking them, and hold out the newest third (31 tokens, since 2024-10-22) as the test. Inside the older 61, fit on the oldest 40 and validate on the next 21, trying w = 0, 0.1, … 1. Validation picks w = 0.4. The test is then scored once:
 
-  The leave-one-out residuals set each row's 80% value band.
+  | | walk-forward (31 newest) | leave-one-out (92) |
+  |---|---|---|
+  | shipped, w = 0.4 | 1.91 | 1.73 |
+  | size alone | **1.88** | 1.76 |
+  | full effects (w = 1) | 1.98 | **1.73** |
+  | flat multiple | 2.19 | 1.94 |
+
+  The figures are ln-RMSE. Size alone still edges the blend on the newest tokens, which price richer than older look-alikes, so the effects only adjust within a size band. Earlier versions of this README reported the same split, so it isn't pristine; no choice in the engine reads it. The leave-one-out residuals set each row's 80% value band.
 - **Momentum and runway** are stated priors: the 7-day TVL change, and the days run with no token. Fitted as slopes on the trading tokens instead, leave-one-out shrank both to about zero, so they stay stated, and the test shows the priors cost little held out.
 - **Class.** Watchlist and early rows count in full. Rows that have a parent are cut to 0.35. Wrapped, staked, bridged and CEX products are set aside off the board.
 - **Token odds.** A logistic fit of "carries a token" on size, age, chains and family. Its 5-fold cross-validated AUC is 0.72. Expected value is the odds times the implied value.
