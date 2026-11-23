@@ -27,8 +27,9 @@ check('dashboard_files', () => {
   }
   if (!files.includes('index.html') || !files.some((f) => f.endsWith('.css')) || !files.some((f) => f.endsWith('.js'))) return 'need index.html, .css, .js';
   if (files.length > 400 || bytes > 4_194_304) return 'too big';
-  console.log(`  dashboard: ${files.length} files, ${bytes} bytes (${text} text; keep under ~60000 for the dossier)`);
-  return text > 60_000 ? `source ${text} bytes, the dossier would cut it` : null;
+  const shown = JSON.parse(readFileSync(join(out, 'dossier.json'), 'utf8')).text as string;
+  console.log(`  dashboard: ${files.length} files, ${bytes} bytes; dossier text ${Buffer.byteLength(shown)} of 65536 bytes`);
+  return /\[Cut at \d+ bytes:/.test(shown) ? 'the dossier cuts the source: the judge would read part of it' : null;
 });
 const board = JSON.parse(readFileSync(join(out, 'board.json'), 'utf8'));
 const r: any[] = Array.isArray(board) ? board : board.rows;

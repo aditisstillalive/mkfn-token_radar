@@ -17,8 +17,8 @@ const dest = resolve('screenshots');
 // build-up and the whole farm plan show in one image.
 const SHOTS = [
   ['1-board.jpg', '#/board', 1440, 900],
-  ['2-detail.jpg', '#/board?sel=gauntlet', 1280, 1440],
-  ['3-filtered.jpg', '#/board?cls=early&grow=1&sort=est_per_1k_usd&dir=desc&sel=__first', 1440, 900],
+  ['2-detail.jpg', '#/board?sel=__farm', 1280, 1440], // the best-ranked row whose costed plan says farm
+  ['3-filtered.jpg', '#/board?cls=early&v=ok&sort=net&dir=desc&sel=__first', 1440, 900],
 ];
 const LO = 300_000, HI = 350_000;
 
@@ -29,8 +29,10 @@ mkdirSync(dest, { recursive: true });
 
 for (const [name, hash, w, h] of SHOTS) {
   await page.setViewportSize({ width: w, height: h });
-  await page.goto(page0 + hash.replace('&sel=__first', ''));
+  await page.goto(page0 + hash.replace(/[?&]sel=__\w+/, ''));
+  await page.waitForSelector('body[data-checked]'); // the in-browser recompute has finished
   if (hash.includes('__first')) await page.click('tbody tr[data-slug]');
+  if (hash.includes('__farm')) await page.click(`tr[data-slug="${await page.evaluate(() => window.RADAR.rows.find((r) => r.plan.verdict === 'farm').slug)}"]`);
   await page.waitForTimeout(150);
   let lo = 40, hi = 100, best = null;
   while (lo <= hi) {
