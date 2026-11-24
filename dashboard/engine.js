@@ -1,27 +1,25 @@
-// engine.js: the whole radar, snapshot in, ranked board out. main.ts runs this file to write board.json
-// and data.js; the page loads it again and re-derives every row from the snapshot that data.js carries,
-// so the screenshots show what this code computes. Plain script, no imports, no network, no names.
+// engine.js: the whole radar, snapshot in, ranked board out. main.ts runs it to write board.json; the page
+// runs it again on the same snapshot, so the screenshots show what this code computes. No imports, no network.
 //
 //   implied value  = fitted core value x momentum x runway x class                (value if it launches)
 //   core value     = exp(a + b ln TVL + any term that survived both tests)       ridge on trading tokens
-//   token odds     = logistic(size, age, chains, family)            share of look-alikes carrying a token
+//   token odds     = logistic(terms that survived both tests)        share of look-alikes carrying a token
 //   expected value = token odds x implied value
 //
-// Terms are tried one at a time after size (family, category, 7d change, days tracked) and kept only if
-// they lower the miss both in exact leave-one-out and on a validation fold (fit the oldest tokens, score
-// the next). The newest third is a test: scored for every step, never used to choose.
+// Each model's terms are tried in order and kept only if both held-out tests improve; the newest third
+// is scored at every step and never chooses.
 (function (root) {
   'use strict';
 
   var K = {
-    MODEL: 'fit-v5',
+    MODEL: 'fit-v6',
     LAMBDAS: [1, 3, 10, 30], // ridge penalties tried for a term, chosen by leave-one-out
     RATIO_MIN: 0.01, RATIO_MAX: 25, // a comp's mcap/TVL is clamped here before the log (leverage cap)
     GROWTH_FLOOR: -50, GROWTH_CAP: 60, // momentum prior: (1 + clamped 7d change)^1
     RUNWAY_FLOOR: 0.6, RUNWAY_RANGE: 0.4, RUNWAY_TAU: 365, // runway prior: floor + range (1 - e^-days/tau)
     PARENTED: 0.35, DERIVATIVE: 0.12, // class factors (derivatives are set aside off the board)
-    ODDS_LAMBDA: 1, FOLDS: 5, // logistic ridge penalty and cross-validation folds for token odds
-    TICKET: 0, // deposit; 0 sizes it at 1/50,000 of TVL, $250 to $10K
+    ODDS_LAMBDA: 1, FOLDS: 10, // logistic ridge penalty and cross-validation folds for token odds
+    TICKET: 2500, // deposit: a retail ticket; carry and risk scale with it, so it moves a verdict only via fixed gas
     AIRDROP_SHARE: 0.075, SEASON_DAYS: 180, FARM_DAYS: 90, // farmer share of supply; the reader farms 90 of 180 days
     LAUNCH_FLOAT: 0.3, // circulating share at launch: comps price the float, a drop is a share of the full supply
     LOSS_GIVEN_EXPLOIT: 0.6,
@@ -188,40 +186,43 @@
   function momentum(g) { return 1 + clamp(g === null || g === undefined ? 0 : g, K.GROWTH_FLOOR, K.GROWTH_CAP) / 100; }
   function runway(age) { return K.RUNWAY_FLOOR + K.RUNWAY_RANGE * (1 - Math.exp(-age / K.RUNWAY_TAU)); }
 
-  // ---- token odds: a logistic fit of "carries a token" on the protocol's profile
-  function oddsModel(s, unknownAge) {
+  // ---- token odds: a logistic fit of "carries a token" on the protocol's profile. Terms are tried in order
+  // after the base rate and kept only if they lower the Brier score both in ten-fold CV on the older two
+  // thirds and on a walk-forward fold (fit its oldest part, score the next). The newest third never chooses.
+  var OTERMS = [['size: ln TVL', function (p, c) { return [Math.log(p.tvl_usd) - c]; }],
+    ['days tracked', function (p, c, ua, s) { var a = ageDays(s.as_of, p.listed_at); return [Math.log1p((a === null ? ua : a) / 365)]; }],
+    ['chain count', function (p) { return [Math.log(Math.max(1, p.chains.length))]; }],
+    ['family', function (p) { var f = family(p.category); return FAMS.map(function (x) { return +(x === f); }); }]];
+  function oddsModel(s, ua) {
     var pop = s.protocols.filter(function (p) { return !ruleFailure(p) && p.tvl_usd > 0; });
-    var centre = pop.reduce(function (a, p) { return a + Math.log(p.tvl_usd); }, 0) / pop.length;
-    function row(p) {
-      var a = ageDays(s.as_of, p.listed_at), f = family(p.category);
-      return [1, Math.log(p.tvl_usd) - centre, Math.log1p((a === null ? unknownAge : a) / 365), Math.log(Math.max(1, p.chains.length))].concat(FAMS.map(function (x) { return x === f ? 1 : 0; }));
-    }
-    function fit(rows) { // Newton-Raphson on the penalised log-likelihood, a fixed 12 steps (converged well before)
-      var d = rows[0].x.length, w = new Array(d).fill(0);
+    var c = pop.reduce(function (a, p) { return a + Math.log(p.tvl_usd); }, 0) / pop.length, y = function (p) { return hasToken(p) ? 1 : 0; };
+    function fit(ps, terms) { // Newton-Raphson on the penalised log-likelihood, a fixed 12 steps (converged well before)
+      var row = function (p) { var x = [1]; terms.forEach(function (t) { x = x.concat(OTERMS[t][1](p, c, ua, s)); }); return x; };
+      var X = ps.map(row), d = X[0].length, w = new Array(d).fill(0);
       for (var it = 0; it < 12; it++) {
         var H = [], g = new Array(d).fill(0), j, k;
         for (j = 0; j < d; j++) { H.push(new Array(d).fill(0)); H[j][j] = j ? K.ODDS_LAMBDA : 1e-6; g[j] = j ? -K.ODDS_LAMBDA * w[j] : 0; }
-        rows.forEach(function (r) { var q = 1 / (1 + Math.exp(-dot(w, r.x))); for (j = 0; j < d; j++) { g[j] += (r.y - q) * r.x[j]; for (k = 0; k < d; k++) H[j][k] += q * (1 - q) * r.x[j] * r.x[k]; } });
+        X.forEach(function (x, i) { var q = 1 / (1 + Math.exp(-dot(w, x))), e = y(ps[i]) - q; for (j = 0; j < d; j++) { g[j] += e * x[j]; for (k = 0; k < d; k++) H[j][k] += q * (1 - q) * x[j] * x[k]; } });
         var Hi = inverse(H);
-        w = w.map(function (v, j2) { return v + dot(Hi[j2], g); });
+        w = w.map(function (v, i) { return v + dot(Hi[i], g); });
       }
-      return function (x) { return 1 / (1 + Math.exp(-dot(w, x))); };
+      return function (p) { return 1 / (1 + Math.exp(-dot(w, row(p)))); };
     }
-    var rows = pop.map(function (p, i) { return { x: row(p), y: hasToken(p) ? 1 : 0, fold: i % K.FOLDS }; });
-    var cv = [];
-    for (var f = 0; f < K.FOLDS; f++) {
-      var m = fit(rows.filter(function (r) { return r.fold !== f; }));
-      rows.forEach(function (r) { if (r.fold === f) cv.push([m(r.x), r.y]); });
+    var se = function (m, p) { var e = m(p) - y(p); return e * e; }, brier = function (m, ps) { return r4(ps.reduce(function (a, p) { return a + se(m, p); }, 0) / ps.length); };
+    var tt = byDate(pop), tr = tt[0], fv = byDate(tr);
+    function scores(terms) {
+      var e = 0, f;
+      for (f = 0; f < K.FOLDS; f++) { var m = fit(tr.filter(function (p, i) { return i % K.FOLDS !== f; }), terms); tr.forEach(function (p, i) { if (i % K.FOLDS === f) e += se(m, p); }); }
+      return { cv: r4(e / tr.length), val: brier(fit(fv[0], terms), fv[1]), test: brier(fit(tr, terms), tt[1]) };
     }
-    var base = rows.filter(function (r) { return r.y; }).length / rows.length;
-    var ll = function (q, y) { q = clamp(q, 1e-6, 1 - 1e-6); return -(y * Math.log(q) + (1 - y) * Math.log(1 - q)); };
-    var pos = cv.filter(function (c) { return c[1]; }), neg = cv.filter(function (c) { return !c[1]; }), wins = 0;
-    pos.forEach(function (a) { neg.forEach(function (b) { wins += a[0] > b[0] ? 1 : a[0] === b[0] ? 0.5 : 0; }); });
-    var br = function (q) { return r4(cv.reduce(function (a, c) { var e = (q === null ? c[0] : q) - c[1]; return a + e * e; }, 0) / cv.length); };
-    var full = fit(rows);
-    return { predict: function (p) { return full(row(p)); },
-      test: { n: rows.length, with_token: Math.round(base * rows.length), base_rate: r4(base), folds: K.FOLDS, auc: r4(wins / Math.max(1, pos.length * neg.length)),
-        log_loss: r4(cv.reduce(function (a, c) { return a + ll(c[0], c[1]); }, 0) / cv.length), base_log_loss: r4(cv.reduce(function (a, c) { return a + ll(base, c[1]); }, 0) / cv.length), brier: br(null), base_brier: br(base) } };
+    var cur = scores([]), kept = [], steps = [Object.assign({ term: 'base rate', kept: 'baseline' }, cur)];
+    OTERMS.forEach(function (t, i) {
+      var x = scores(kept.concat(i)), k = x.cv < cur.cv && x.val < cur.val;
+      steps.push(Object.assign({ term: (i ? '+ ' : '') + t[0], kept: k }, x));
+      if (k) { kept.push(i); cur = x; }
+    });
+    return { predict: fit(pop, kept), test: { n: pop.length, with_token: pop.filter(y).length, folds: K.FOLDS, steps: steps, kept: kept.map(function (i) { return OTERMS[i][0]; }),
+      shipped: cur, split: { train: tr.length, val: fv[1].length, test: tt[1].length, test_from: tt[1][0].listed_at } } };
   }
 
   // ---- valuation
@@ -255,13 +256,12 @@
     Other: ['USDC', 'deposit into its main product on %c and confirm the position shows in its dashboard', 'Repeat one small interaction a week so the address shows sustained use', 2, 20, 0, 0.02, 0.003],
   };
   function money(x) { var a = Math.abs(x), s = a >= 100 ? String(Math.round(a)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : a.toFixed(2); return (x < 0 ? '-$' : '$') + s; }
-  function nice(x) { var e = Math.pow(10, Math.floor(Math.log10(x))), m = x / e; return (m < 1.5 ? 1 : m < 3.5 ? 2.5 : m < 7.5 ? 5 : 10) * e; }
   function pct(x) { return (x * 100).toFixed(x < 0.1 ? 1 : 0) + '%'; }
 
   function farmPlan(p, v, odds, asOf) {
     var fam = family(p.category), a = ACT[fam] || ACT.Other, chain = p.chains[0] || 'Ethereum', gas = GAS[chain] === undefined ? 0.25 : GAS[chain];
     p.chains.forEach(function (c) { var g = GAS[c] === undefined ? 0.25 : GAS[c]; if (g < gas) { gas = g; chain = c; } });
-    var ticket = K.TICKET || Math.min(10000, Math.max(250, nice(p.tvl_usd / 50000))), weeks = Math.round(K.FARM_DAYS / 7), yr = K.FARM_DAYS / 365;
+    var ticket = K.TICKET, weeks = Math.round(K.FARM_DAYS / 7), yr = K.FARM_DAYS / 365;
     var bridge = chain === 'Ethereum' ? 0 : chain === 'Bitcoin' ? 5 : 1.5;
     var gasUsd = gas * (2 + a[3] + 2 + weeks + 2), carry = ticket * a[6] * yr;
     var age = v.age === null ? 700 : v.age, pExploit = (age < 365 ? 0.06 : age < 1095 ? 0.03 : 0.015) * (p.tvl_usd < 2e7 ? 1.5 : 1);
@@ -276,7 +276,7 @@
     var steps = [
       ['Fund a fresh wallet on ' + chain + (p.chains.length > 1 ? ' (cheapest of its ' + p.chains.length + ' chains)' : '') + ' with ' + a[0] + ' and bookmark the app from its DefiLlama page, not a search ad', money(bridge + gas * 2) + ' bridge and gas', '15 min'],
       ['Test with $100: ' + a[1].replace(/%c/g, chain), money(gas * a[3]) + ' gas', a[4] + ' min'],
-      ['Scale to the ' + money(ticket) + ' ticket once the test can be withdrawn' + (K.TICKET ? '' : ' (about 1/50,000 of its TVL)') + '; ' + lock, money(ticket) + ' capital, ' + money(carry) + ' carry over ' + K.FARM_DAYS + ' days', '10 min'],
+      ['Scale to the ' + money(ticket) + ' ticket once the test can be withdrawn; ' + lock, money(ticket) + ' capital, ' + money(carry) + ' carry over ' + K.FARM_DAYS + ' days', '10 min'],
       [a[2].replace(/%c/g, chain), money(gas * 2) + ' gas', '20 min'],
       ['Hold ' + K.FARM_DAYS + ' days with one small interaction a week (claim, compound or top up) and log each points snapshot', money(gas * weeks) + ' gas in all', '5 min a week, ' + weeks + ' weeks'],
       ['Risk ' + level + ': expected loss ' + money(riskUsd) + ' (' + pct(pExploit) + ' a year exploit odds for a ' + Math.round(age / 30) + '-month record, plus market risk). Exit or halve if the ' + trig + ' or a snapshot is announced', money(gas * 2 + bridge) + ' exit gas and bridge', '15 min'],

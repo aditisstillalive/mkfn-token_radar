@@ -1,7 +1,5 @@
-// Token Radar page: renders window.RADAR (written by main.ts from engine.js) as three views, the board
-// with its cover, filters, plan controls and a detail panel, the set-aside list, and the model with its
-// held-out tests. It re-runs RadarEngine.build on window.SNAPSHOT here and reports whether rows match.
-// State lives in the hash (#/board?v=farm&sel=slug) so every view can be linked and captured.
+// Token Radar page: renders window.RADAR (main.ts ran engine.js) as the board with cover, filters, plan and
+// detail, the set-aside list and the model; re-runs engine.js here to check rows. State lives in the hash.
 (function () {
   'use strict';
   var R = window.RADAR, app = document.getElementById('app');
@@ -59,9 +57,9 @@
     var k = [
       ['Out-of-sample miss', '×' + m.test.median_x.toFixed(2) + ' <small>vs ×' + fl.test.median_x.toFixed(2) + ' flat</small>', 'median, newest ' + T.split.test + ' tokens, never fitted', 1],
       ['Range honesty', Math.round(cv.p25_p75 * 100) + '% · ' + Math.round(cv.p10_p90 * 100) + '%', 'newest in P25–75 · P10–90; aim 50·80', Math.abs(cv.p25_p75 - 0.5) < 0.15 && Math.abs(cv.p10_p90 - 0.8) < 0.1],
-      ['Token odds Brier', O.brier.toFixed(3) + ' <small>vs ' + O.base_brier.toFixed(3) + '</small>', O.folds + '-fold CV vs base rate · AUC ' + O.auc.toFixed(2), O.brier < O.base_brier],
-      ['Terms kept', T.kept + ' <small>of ' + T.tried + '</small>', 'kept if LOO and validation both fall', 1],
-      ['Worth farming', n.farm + ' <small>+' + n.marginal + ' marginal</small>', 'net of all costs · ' + (st.dep ? money(st.dep) : 'auto') + ' deposit', n.farm > 0],
+      ['Token odds Brier', O.shipped.test.toFixed(3) + ' <small>vs ' + O.steps[0].test.toFixed(3) + '</small>', 'newest ' + O.split.test + ' vs base rate, never fitted', O.shipped.test < O.steps[0].test],
+      ['Terms kept', T.kept + '/' + T.tried + ' <small>value</small> ' + O.kept.length + '/' + (O.steps.length - 1) + ' <small>odds</small>', 'kept only if both held-out tests fall', 1],
+      ['Worth farming', n.farm + ' <small>+' + n.marginal + ' marginal</small>', 'net of all costs · ' + money(R.rows[0].plan.ticket) + ' deposit', n.farm > 0],
       ['Watchlist ranked', C.watch_covered + ' / ' + C.watch, '+' + (C.board - C.watch_covered) + ' more found', C.watch_covered === C.watch],
     ];
     var ch = [['table = board.json', check ? check.ok + '/' + C.board : '…', check && check.ok === C.board],
@@ -78,19 +76,33 @@
     return [['Watchlist', c('watch'), 'var(--sig)'], ['Has a parent', c('parented'), 'var(--violet)'], ['Early, below floor', c('early'), 'var(--amber)'],
       ['Set aside: derivative', C.set_aside, 'var(--ink-3)'], ['Token trades', C.live, 'var(--line-2)']];
   }
-  function steps() {
-    var f = function (s) { return s ? s.rmse.toFixed(2) : '–'; }, V = { baseline: 'baseline', stated: 'stated prior', true: 'kept', false: 'tested, not kept' };
-    return '<table class="mini st"><thead><tr><th>Term, added in order</th><th class="r">LOO ' + C.comps + '</th><th class="r">Validation ' + T.split.val + '</th><th class="r">Newest ' + T.split.test + '</th><th>Verdict</th></tr></thead><tbody>' +
-      T.steps.map(function (s) { return '<tr><td>' + esc(s.term) + '</td><td class="r num">' + f(s.loo) + '</td><td class="r num">' + f(s.val) + '</td><td class="r num">' + f(s.test) + '</td><td class="k-' + s.kept + '">' + V[s.kept] + '</td></tr>'; }).join('') +
-      '</tbody></table><p class="note">ln-RMSE held out, lower is better. A term is kept only if it lowers both LOO and validation (fit the ' + T.split.fit + ' oldest tokens, score the next ' + T.split.val + '); the newest ' + T.split.test + ' (since ' + T.split.test_from + ') are scored once per step and never choose. Size dominates. Momentum and runway stay as stated priors: they are what the brief asks the value to reflect, and the last row shows their cost held out.</p>';
+  function steps(S, k, h, dp) {
+    var V = { baseline: 'baseline', stated: 'stated prior', true: 'kept', false: 'not kept' }, f = function (v) { return v == null ? '–' : (v.rmse || v).toFixed(dp); };
+    return '<table class="mini st"><thead><tr><th>Term, in order</th>' + h.map(function (x) { return '<th class="r">' + x + '</th>'; }).join('') + '<th></th></tr></thead><tbody>' +
+      S.map(function (s) { return '<tr><td>' + esc(s.term) + '</td>' + k.map(function (x) { return '<td class="r num">' + f(s[x]) + '</td>'; }).join('') + '<td class="k-' + s.kept + '">' + V[s.kept] + '</td></tr>'; }).join('') + '</tbody></table>';
+  }
+  function tests() {
+    return '<div><h3>Value: ln-RMSE held out</h3>' + steps(T.steps, ['loo', 'val', 'test'], ['LOO ' + C.comps, 'Val ' + T.split.val, 'Newest ' + T.split.test], 2) +
+      '<p class="note">Kept only if LOO and validation (fit the ' + T.split.fit + ' oldest, score the next) both fall. Size dominates; momentum and runway are the brief\'s priors, cost shown.</p></div>' +
+      '<div><h3>Token odds: Brier held out</h3>' + steps(O.steps, ['cv', 'val', 'test'], [O.folds + '-fold ' + O.split.train, 'Walk-fwd ' + O.split.val, 'Newest ' + O.split.test], 3) +
+      '<p class="note">' + O.n + ' protocols, ' + O.with_token + ' with a token. Kept only if CV on the older two thirds and walk-forward both fall; the newest (since ' + O.split.test_from + ') never choose.</p></div>';
+  }
+  function best() { return R.rows.filter(function (r) { return r.plan.net > 0; }).sort(function (a, b) { return b.plan.net - a.plan.net; }); }
+  function plan(r) {
+    var p = r.plan;
+    return '<div class="budget">Budget ' + money(p.ticket) + ' back + ' + money(p.costs.total) + ' costs · ' + p.hours.toFixed(1) + ' h to ' + p.end + ' · ' + signed(p.net / p.hours) + '/h</div>' +
+      '<ol class="steps">' + p.steps.map(function (s) { return '<li><div><b class="when">' + esc(s.when) + '</b> ' + esc(s.do) + ' <span class="tag c">' + esc(s.cost) + '</span> <span class="tag t">' + esc(s.time) + '</span></div></li>'; }).join('') + '</ol>';
   }
   function cover() {
     var L = ledger(), tot = C.protocols, why = {};
     R.set_aside.forEach(function (r) { var k = r.reason.replace(/^category /, ''); why[k] = (why[k] || 0) + 1; });
-    return '<div class="cover"><div>' + steps() + '</div><div><h3>Every snapshot protocol, in exactly one group</h3><div class="led">' +
+    var B = best(), t = B[0];
+    return '<div class="cover">' + tests() + '<div><h3>Every snapshot protocol, in exactly one group</h3><div class="led">' +
       L.map(function (g) { return '<span style="flex:' + g[1] + ';background:' + g[2] + '"></span>'; }).join('') + '</div><div class="lg">' +
       L.map(function (g, i) { return '<div><i class="cd" style="background:' + g[2] + '"></i>' + g[0] + ' <b>' + g[1] + '</b>' + (i === 3 ? '<div class="sub">' + Object.keys(why).sort(function (a, b) { return why[b] - why[a]; }).map(function (k) { return esc(k) + ' ' + why[k]; }).join(' · ') + '</div>' : i === 4 ? '<div class="sub">launch is past · ' + C.comps + ' price the model, one per token</div>' : '') + '</div>'; }).join('') +
-      '<div>All snapshot protocols ≥ $5M <b>' + tot + '</b></div></div></div></div>';
+      '<div>All snapshot protocols ≥ $5M <b>' + tot + '</b></div></div></div></div><div class="cover c2"><div><h3>Best farms first: ' + B.length + ' net positive at ' + money(t.plan.ticket) + '</h3><table class="mini bf"><tbody>' +
+      B.slice(0, 9).map(function (r) { return '<tr data-slug="' + esc(r.slug) + '"><td class="num">#' + r.rank + '</td><td>' + esc(r.name) + '<div class="sub">' + esc(r.category) + ' · ' + esc(r.plan.chain) + ' · odds ' + odds(r.token_odds) + '</div></td><td>' + vchip(r) + '</td><td class="r num">' + signed(r.plan.net) + '<div class="sub">' + signed(r.plan.net / r.plan.hours) + '/h</div></td></tr>'; }).join('') +
+      '</tbody></table><button class="chip" id="best">All best farms first →</button></div><div><h3>Top farm, expanded: ' + esc(t.name) + ' ' + vchip(t) + '</h3>' + plan(t) + '</div></div>';
   }
 
   // ---- board
@@ -129,7 +141,7 @@
       select('min', [[0, 'Any TVL'], [1e7, 'TVL ≥ $10M'], [5e7, 'TVL ≥ $50M'], [2e8, 'TVL ≥ $200M']], st.min) +
       select('v', [['', 'Any farm verdict'], ['ok', 'Farm or marginal'], ['farm', 'Farm only']], st.v) +
       '<button class="chip" id="grow" aria-pressed="' + st.grow + '">7d up</button><button class="reset" id="reset">Reset</button>' +
-      '<span class="ctl">Plan: ' + select('dep', [[0, 'deposit 1/50,000 TVL'], [1000, '$1,000 deposit'], [5000, '$5,000 deposit'], [25000, '$25,000 deposit']], st.dep) +
+      '<span class="ctl">Plan: ' + select('dep', [[0, '$2,500 deposit'], [1000, '$1,000'], [10000, '$10,000'], [25000, '$25,000']], st.dep) +
       select('sh', [[0, 'drop 7.5% of supply'], [0.03, 'drop 3%'], [0.15, 'drop 15%']], st.sh) + select('hz', [[0, '90-day horizon'], [30, '30 days'], [180, '180 days']], st.hz) +
       '<button class="chip" id="csv">CSV</button><button class="chip" id="json">JSON</button></span><span class="count">' + rows.length + ' of ' + R.rows.length + ' rows · rank = implied value</span></div>';
     var head = '<tr>' + COLS.map(function (c) { return '<th data-k="' + c[0] + '" class="' + (c[2] || '') + (st.sort === c[0] ? ' on' + (st.asc ? ' asc' : '') : '') + '">' + c[1] + '</th>'; }).join('') + '</tr>';
@@ -178,9 +190,8 @@
       '<div><div class="l">Token odds</div><div class="v2">' + odds(r.token_odds) + '</div><div class="sub">expected ' + money(r.expected_value_usd) + '</div></div></div>' +
       '<div class="facts">' + fact('TVL', money(r.tvl_usd)) + fact('7-day change', pct(r.change_7d)) + fact('Tokenless for', days(r.tokenless_days)) + '</div>' +
       '<h3>How the value is built</h3>' + waterfall(r) +
-      '<h3>Farm plan · ' + money(p.ticket) + ' ticket · ' + vchip(r) + '</h3>' + costs(r) + '<div class="budget">Budget ' + money(p.ticket) + ' back + ' + money(p.costs.total) + ' costs · ' + p.hours.toFixed(1) + ' h to ' + p.end + ' · ' + signed(p.net / p.hours) + '/h</div>' +
-      '<ol class="steps">' + p.steps.map(function (s) { return '<li><div><b class="when">' + esc(s.when) + '</b> ' + esc(s.do) + ' <span class="tag c">' + esc(s.cost) + '</span> <span class="tag t">' + esc(s.time) + '</span></div></li>'; }).join('') + '</ol>' +
-      '<div class="note">Core value ' + money(r.core_value_usd) + ' is the size fit on ' + C.comps + ' trading tokens; momentum and runway are stated priors. DefiLlama records no token for ' + esc(r.name) + ', which is not proof it has none; the value is this model\'s claim, not a forecast of a launch.</div></aside>';
+      '<h3>Farm plan · ' + money(p.ticket) + ' ticket · ' + vchip(r) + '</h3>' + costs(r) + plan(r) +
+      '<div class="note">Core value ' + money(r.core_value_usd) + ' is the fit on ' + C.comps + ' trading tokens; momentum and runway are stated priors. No token on DefiLlama is not proof of none; the value is a claim, not a launch forecast.</div></aside>';
   }
 
   function wireBoard() {
@@ -192,19 +203,21 @@
     ['cat', 'chain', 'min', 'v', 'dep', 'sh', 'hz'].forEach(function (id) { document.getElementById(id).onchange = function (e) { var v = e.target.value; st[id] = /min|dep|sh|hz/.test(id) ? +v : v; go(); }; });
     document.getElementById('csv').onclick = function () { save('csv'); };
     document.getElementById('json').onclick = function () { save('json'); };
+    var b = document.getElementById('best');
+    if (b) b.onclick = function () { st.sort = 'net'; st.asc = false; st.v = 'ok'; go(); };
     document.getElementById('grow').onclick = function () { st.grow = !st.grow; go(); };
     document.getElementById('reset').onclick = function () { location.hash = '#/board'; };
     app.querySelectorAll('th[data-k]').forEach(function (th) {
       th.onclick = function () { var k = th.getAttribute('data-k'); if (st.sort === k) st.asc = !st.asc; else { st.sort = k; st.asc = k === 'rank' || k === 'name'; } go(); };
     });
-    app.querySelectorAll('tbody tr[data-slug]').forEach(function (tr) { tr.onclick = function () { var s = tr.getAttribute('data-slug'); st.sel = st.sel === s ? '' : s; go(); }; });
+    app.querySelectorAll('tr[data-slug]').forEach(function (tr) { tr.onclick = function () { var s = tr.getAttribute('data-slug'); st.sel = st.sel === s ? '' : s; go(); }; });
     var c = document.getElementById('close');
     if (c) c.onclick = function () { st.sel = ''; go(); };
   }
 
   // ---- set aside
   function aside() {
-    app.innerHTML = '<div class="prose"><p>These ' + C.set_aside + ' protocols record no token on DefiLlama but fail the watchlist\'s own rule: a CEX\'s reserve wallets, a staking or bridged wrapper, or a versioned product. Their value already trades as another token, so they stay off the ranked board; the reference value applies a class factor of ' + R.constants.DERIVATIVE + '.</p></div>' +
+    app.innerHTML = '<div class="prose"><p>These ' + C.set_aside + ' tokenless protocols fail the watchlist\'s own rule (CEX wallets, wrappers, versioned products): their value trades as another token. Reference value uses class factor ' + R.constants.DERIVATIVE + '.</p></div>' +
       '<div class="tbl"><div class="scroll"><table><thead><tr><th>Protocol</th><th>Category</th><th>Why set aside</th><th class="r">TVL</th><th class="r">7d</th><th class="r">Reference value</th></tr></thead><tbody>' +
       R.set_aside.map(function (r) { return '<tr><td class="nm">' + esc(r.name) + '</td><td class="sub">' + esc(r.category || '–') + '</td><td>' + esc(r.reason) + '</td><td class="r num">' + money(r.tvl_usd) + '</td><td class="r num">' + pct(r.change_7d) + '</td><td class="r num sub">' + money(r.implied_value_usd) + '</td></tr>'; }).join('') +
       '</tbody></table></div></div>';
@@ -212,17 +225,15 @@
 
   // ---- model and its tests
   function model() {
-    var K = R.constants, F = R.fit, H = '<tr><th></th><th class="r">ln-RMSE</th><th class="r">Median miss</th><th class="r">Within 3×</th><th class="r">Rank corr</th></tr>';
-    app.innerHTML = '<div class="prose"><p>What would each protocol\'s token be worth if its record stayed as the snapshot shows it, and how likely is a token at all? Both answers are fitted on the snapshot\'s own protocols in <code>engine.js</code> and scored on data the fit did not see. No protocol is named in the code.</p>' +
+    var K = R.constants, F = R.fit;
+    app.innerHTML = '<div class="prose"><p>What would each token be worth, and how likely is one? Both are fitted in <code>engine.js</code> on the snapshot and scored on data the fit did not see.</p>' +
       '<div class="formula">implied = core × momentum × runway × class<br>core: ln mcap = ' + F.a.toFixed(2) + ' + ' + F.b.toFixed(3) + ' × (ln TVL − ln ' + money(F.centre_tvl) + ')' + (F.terms.length ? ' + ' + F.terms.join(' + ') : '') + ', fitted on ' + C.comps + ' trading tokens<br>' +
       'value bands: the leave-one-out misses, P10 ' + x3(F.band[0]) + ' · P25 ' + x3(F.band[1]) + ' · P75 ' + x3(F.band[2]) + ' · P90 ' + x3(F.band[3]) + '<br>' +
       'momentum = 1 + clamp(7d, ' + K.GROWTH_FLOOR + '%, +' + K.GROWTH_CAP + '%) · runway = ' + K.RUNWAY_FLOOR + ' + ' + K.RUNWAY_RANGE + '(1 − e^(−days/' + K.RUNWAY_TAU + ')), unknown age ' + F.unknown_age_days + ' d<br>' +
       'class = 1 watchlist or early · ' + K.PARENTED + ' parented · ' + K.DERIVATIVE + ' derivative (set aside)<br>' +
-      'token odds = logistic(ln TVL, ln(1 + years tracked), ln chains, family), ridge ' + K.ODDS_LAMBDA + ', fitted on ' + O.n + ' protocols (' + O.with_token + ' carry a token)<br>' +
+      'token odds = logistic(' + (O.kept.join(', ') || 'base rate') + '), ridge ' + K.ODDS_LAMBDA + ', fitted on ' + O.n + ' protocols (' + O.with_token + ' carry a token)<br>' +
       'drop on a ticket = implied / ' + K.LAUNCH_FLOAT + ' float × ' + K.AIRDROP_SHARE + ' to farmers × ' + K.FARM_DAYS + '/' + K.SEASON_DAYS + ' days × ticket / TVL</div></div>' +
-      '<div class="cols"><div><h3>Value model, term by term</h3>' + steps() +
-      '</div><div><h3>Token odds, ' + O.folds + '-fold cross-validated</h3><table class="mini"><tbody><tr><td>AUC (0.5 is a coin)</td><td class="r num">' + O.auc.toFixed(3) + '</td></tr><tr><td>Log-loss, model vs base rate ' + odds(O.base_rate) + '</td><td class="r num">' + O.log_loss.toFixed(3) + ' vs ' + O.base_log_loss.toFixed(3) + '</td></tr><tr><td>Brier, model vs base rate</td><td class="r num">' + O.brier.toFixed(3) + ' vs ' + O.base_brier.toFixed(3) + '</td></tr></tbody></table></div>' +
-      '</div>';
+      '<div class="cols">' + tests() + '</div>';
   }
 
   // ---- router and the in-browser recompute

@@ -1,22 +1,4 @@
-:root {
---bg:#0b1016;
---panel:#111822;
---panel-2:#16202c;
---line:#223040;
---line-2:#2c3d51;
---ink:#e6edf3;
---ink-2:#a9b6c4;
---ink-3:#6f8194;
---sig:#3ddc97;
---sig-dim:#1d6b4c;
---amber:#f5b84b;
---red:#f0706a;
---blue:#6cb2ff;
---violet:#b59cff;
---mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
---sans:Inter,"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
---r:8px;
-}
+:root {--bg:#0b1016;--panel:#111822;--panel-2:#16202c;--line:#223040;--line-2:#2c3d51;--ink:#e6edf3;--ink-2:#a9b6c4;--ink-3:#6f8194;--sig:#3ddc97;--sig-dim:#1d6b4c;--amber:#f5b84b;--red:#f0706a;--blue:#6cb2ff;--violet:#b59cff;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;--sans:Inter,"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;--r:8px;}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans)}
 a{color:inherit}
@@ -72,7 +54,6 @@ tbody tr.sel{background:rgba(61,220,151,.09);box-shadow:inset 3px 0 0 var(--sig)
 .bar{min-width:130px}
 .bar b{display:block;font-weight:600}
 .bar em{display:block;font:10px var(--mono);color:var(--ink-3);font-style:normal}
-.bar span{display:block;height:3px;margin:3px 0 0 auto;border-radius:2px;background:linear-gradient(270deg,var(--sig),var(--sig-dim))}
 .has-sel .x2{display:none}
 .badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:4px;border:1px solid}
 .b-watch{color:var(--sig);border-color:var(--sig-dim)}
@@ -128,11 +109,11 @@ code{font:12px var(--mono);background:var(--panel-2);padding:1px 5px;border-radi
 .empty{padding:40px;text-align:center;color:var(--ink-3)}
 @media (max-width:1300px) {
 .split{grid-template-columns:minmax(0,1fr) 450px}
-.has-sel .x3{display:none}
+.has-sel .x3,.x2{display:none}
 }
 @media (max-width:1100px) {
+th,td{padding:6px 7px}
 .split{grid-template-columns:1fr}
-.x2{display:none}
 .filters input[type=search]{width:120px}
 .chip{padding:4px 9px}
 .cols{grid-template-columns:1fr}
@@ -142,7 +123,7 @@ code{font:12px var(--mono);background:var(--panel-2);padding:1px 5px;border-radi
 .chips span{border:1px solid var(--line-2);border-radius:10px;padding:1px 8px}
 .chips .ok{color:var(--sig);border-color:var(--sig-dim)}
 .chips i{font-style:normal;color:var(--ink-3)}
-.cover{display:grid;grid-template-columns:3fr 2fr;gap:16px;margin-bottom:10px}
+.cover{display:grid;grid-template-columns:5fr 5fr 4fr;gap:14px;margin-bottom:10px}.c2{grid-template-columns:2fr 3fr}.bf{width:100%}.bf tr{cursor:pointer}.bf td{vertical-align:top}.c2 ol.steps li{font-size:12px;padding:2px 0}.c2 .chip{margin-top:6px}
 .cover h3{margin:0 0 6px}
 .cover .mini td,.cover .mini th{padding:3px 8px}
 .cover .note{margin:4px 0 0;font-size:11px}
@@ -161,5 +142,4 @@ code{font:12px var(--mono);background:var(--panel-2);padding:1px 5px;border-radi
 .lg .sub{font-size:10.5px}
 .has-sel td,.has-sel th{padding:6px 7px}
 .has-sel .fp small{display:none}
-@media (max-width:1100px){th,td{padding:6px 7px}}
 td .sub{display:block;max-width:230px;overflow:hidden;text-overflow:ellipsis}

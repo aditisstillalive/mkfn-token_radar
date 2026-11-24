@@ -82,5 +82,5 @@ const c = radar.counts;
 const t = radar.test;
 process.stdout.write(`token radar ${radar.model}: ${c.protocols} protocols, ${c.live} with a token (${c.comps} priced comps), ${c.tokenless} tokenless; board ${c.board} rows (watchlist ${c.watch_covered}/${c.watch}), ${c.set_aside} set aside\n`);
 const kept = t.steps.filter((x: any) => x.kept === true).pop();
-process.stdout.write(`held out: ${t.kept}/${t.tried} terms kept; LOO rmse ${kept.loo.rmse} (flat ${t.steps[0].loo.rmse}), newest-${t.split.test} test ${kept.test.rmse} (flat ${t.steps[0].test.rmse}); token odds AUC ${radar.odds_test.auc}\n`);
+process.stdout.write(`held out: ${t.kept}/${t.tried} terms kept; LOO rmse ${kept.loo.rmse} (flat ${t.steps[0].loo.rmse}), newest-${t.split.test} test ${kept.test.rmse} (flat ${t.steps[0].test.rmse}); token odds ${radar.odds_test.kept.length}/4 terms kept, newest Brier ${radar.odds_test.shipped.test} (base ${radar.odds_test.steps[0].test})\n`);
 process.stdout.write(`token radar: wrote board.json, data.js, dashboard/ (${pages.length} files), screenshots/ (${shots.length}) and dossier.json to ${out}\n`);

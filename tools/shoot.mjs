@@ -16,9 +16,9 @@ const dest = resolve('screenshots');
 // The detail view is captured tall (1280x1440: long side 1440, short side over 800) so the value
 // build-up and the whole farm plan show in one image.
 const SHOTS = [
-  ['1-board.jpg', '#/board', 1024, 1024], // the cover: KPIs, self-checks, term-by-term test, ledger, top rows
+  ['1-board.jpg', '#/board', 1280, 1280], // the cover: KPIs, self-checks, both term-by-term tests, ledger, best farms, a plan, top rows
   ['2-detail.jpg', '#/board?sel=__farm', 1280, 1440], // the best-ranked row whose costed plan says farm
-  ['3-filtered.jpg', '#/board?cls=early&v=ok&dep=1000&sort=net&dir=desc&sel=__first', 1440, 900],
+  ['3-filtered.jpg', '#/board?v=ok&dep=10000&sort=net&dir=desc&sel=__first', 1440, 900],
 ];
 const LO = 300_000, HI = 350_000;
 

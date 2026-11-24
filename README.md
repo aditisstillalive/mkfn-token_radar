@@ -8,7 +8,7 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
 
 **One engine, read by the judge.** The whole model lives in `dashboard/engine.js`. `main.ts` runs it to write `board.json`, and the page runs it again in the browser and checks that every row matches. Because it sits inside the dashboard, it is part of the source the dossier shows.
 
-**Value model (`fit-v5`).** `implied = core × momentum × runway × class`
+**Value model (`fit-v6`).** `implied = core × momentum × runway × class`
 
 - **Core: only the terms that survive both tests.** The fit is ln market cap on ln TVL, using the snapshot's own trading tokens (one comp per token). The 92 comps are sorted by when DefiLlama began tracking them, then split:
   - the oldest 40 are the fit set;
@@ -31,7 +31,21 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
 - **Value bands.** P10, P25, P75 and P90 come from the leave-one-out misses. Their honesty is checked on the test, using the training fit's own quantiles: 58% of the newest caps land inside P25–P75 (aim 50%) and 74% inside P10–P90 (aim 80%).
 - **Momentum and runway** are stated priors: the 7-day TVL change and the days run with no token. They're what the brief asks the value to reflect. As fitted slopes they did not survive, and the table's last row shows what applying them costs held out.
 - **Class.** Watchlist and early rows count in full. Rows that have a parent are cut to 0.35. Wrapped, staked, bridged and CEX products are set aside off the board.
-- **Token odds.** A logistic fit of "carries a token" on size, age, chains and family. Its 5-fold cross-validated scores: Brier 0.210 against 0.247 for the base rate, and AUC 0.72. Expected value is the odds times the implied value.
+- **Token odds, term by term.** A logistic fit of "carries a token" over 442 protocols (244 with a token), selected the same way. The protocols are sorted by tracking date:
+  - the older two thirds (294) are training;
+  - the newest 148, tracked since 2025-09-03, are the test.
+
+  A term is kept only if it lowers the Brier score both in 10-fold CV on the training set *and* on a walk-forward fold (fit the oldest part of training, score the next 98).
+
+  | term (Brier held out) | 10-fold 294 | walk-forward 98 | newest 148 | verdict |
+  |---|---|---|---|---|
+  | base rate | 0.223 | 0.392 | 0.336 | baseline |
+  | size: ln TVL | 0.224 | 0.398 | 0.330 | not kept |
+  | + days tracked | 0.214 | 0.388 | 0.229 | kept |
+  | + chain count | 0.216 | 0.399 | 0.229 | not kept |
+  | + family | 0.213 | 0.396 | 0.225 | not kept |
+
+  Only days tracked survives. On the newest third its Brier is 0.229, against 0.336 for the base rate. The odds therefore say how often protocols of a given age carry a token. They are not a launch calendar: a long tokenless run can mean a team that will never launch. Expected value is the odds times the implied value.
 
 No protocol name appears in the code.
 
@@ -42,11 +56,15 @@ No protocol name appears in the code.
 
 It also checks break-even: the drop if a token launches, times the odds, against the costs. That gives a verdict of farm, marginal or skip.
 
-**Dashboard.** The cover (screenshot 1, 1024×1024) holds:
+The default deposit is a retail $2,500. Carry and risk scale with the deposit, so its size moves a verdict only through fixed gas. The largest protocols are poor farms at any size: their drop per dollar deposited is small. That is why the board's top rows say skip, and why the cover lists the best farms separately. At $2,500, 43 rows are farm and 29 marginal.
+
+**Dashboard.** The cover (screenshot 1, 1280×1280) holds:
 - six KPI cards: out-of-sample miss against flat, range honesty, token-odds Brier, terms kept, rows worth farming, and watchlist ranked;
 - self-check chips: table = board.json (re-run in the browser), ranks in order, ledger 758/758, watchlist 40/40, and the sha256 of main.ts and board.json;
-- the term-by-term test table;
-- a ledger putting every snapshot protocol in exactly one group (watchlist, has a parent, early, set aside by reason, token trades).
+- the term-by-term tables for value (ln-RMSE) and token odds (Brier);
+- a ledger putting every snapshot protocol in exactly one group (watchlist, has a parent, early, set aside by reason, token trades);
+- the best farms first: the nine highest net-positive plans, linked to their rows, plus a button that sorts the whole board that way;
+- the top farm's plan expanded, with its budget line and seven dated steps, each with its cost and time.
 
 The board below it is sortable and filterable and covers 198 tokenless candidates, including all 40 watchlist protocols. Each row shows:
 - the implied value, with its P25–P75 range bar;
