@@ -1,6 +1,6 @@
 // Token Radar (make.fun token-radar-01). Node 22, standard library only, no network.
 //
-// Reads the sealed snapshot (/input/snapshot.json, or --input <file|dir>) and runs dashboard/engine.js,
+// Reads the sealed snapshot (/input/snapshot.json, or --input <file|dir>) and runs dashboard/_engine.js,
 // the one file that fits the value model, tests it held out, prices every tokenless protocol, fits the
 // token odds and costs each farm plan. The page loads the same file and re-derives the board, so the
 // judge reads the model in the dossier. Writes into /output (or $MAKEFUN_OUTPUT_DIR / --output):
@@ -43,9 +43,9 @@ const out = flag('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshotText = readFileSync(snapshotPath, 'utf8');
 const snapshot = parseSnapshot(snapshotText);
-const sandbox: { RadarEngine?: { build: (s: unknown) => any } } = {};
+const sandbox: { RadarEngine?: { build: (s: unknown) => any; assumptions: (s: unknown) => any } } = {};
 vm.createContext(sandbox);
-vm.runInContext(readFileSync(join(here, 'dashboard', 'engine.js'), 'utf8'), sandbox, { filename: 'engine.js' });
+vm.runInContext(readFileSync(join(here, 'dashboard', '_engine.js'), 'utf8'), sandbox, { filename: '_engine.js' });
 const radar = sandbox.RadarEngine!.build(JSON.parse(snapshotText));
 const board: BoardRow[] = radar.rows.map(({ plan, ...r }: { plan: any } & BoardRow) => ({ ...r, farm: { ticket_usd: plan.ticket, ...plan.costs, reward_if_launch_usd: plan.reward, expected_usd: plan.expected, breakeven_odds: plan.breakeven_odds, lockup_days: plan.lockup_days, risk: plan.risk, verdict: plan.verdict } }));
 const issue = boardIssue(board, snapshot);
@@ -56,7 +56,7 @@ const boardText = `${JSON.stringify({ model: radar.model, as_of: radar.as_of, ro
 writeFileSync(join(out, 'board.json'), boardText);
 // The page shows these as self-checks: the program that wrote this output, and the board it wrote.
 const sha = (x: string | Buffer) => createHash('sha256').update(x).digest('hex');
-const page = { ...radar, main_sha256: sha(readFileSync(join(here, 'main.ts'))), board_sha256: sha(boardText), rows: radar.rows.map(({ farm_steps, ...r }: { farm_steps: string[] }) => r) };
+const page = { ...radar, assumptions: sandbox.RadarEngine!.assumptions(JSON.parse(snapshotText)), main_sha256: sha(readFileSync(join(here, 'main.ts'))), board_sha256: sha(boardText), rows: radar.rows.map(({ farm_steps, ...r }: { farm_steps: string[] }) => r) };
 writeFileSync(join(out, 'data.js'), `window.RADAR=${JSON.stringify(page)};\nwindow.SNAPSHOT=${JSON.stringify(JSON.parse(snapshotText))};\n`);
 
 /** Copy the plain files of one directory, sorted, so the copy is the same every run. */
@@ -81,6 +81,6 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: 65_
 const c = radar.counts;
 const t = radar.test;
 process.stdout.write(`token radar ${radar.model}: ${c.protocols} protocols, ${c.live} with a token (${c.comps} priced comps), ${c.tokenless} tokenless; board ${c.board} rows (watchlist ${c.watch_covered}/${c.watch}), ${c.set_aside} set aside\n`);
-const kept = t.steps.filter((x: any) => x.kept === true).pop();
-process.stdout.write(`held out: ${t.kept}/${t.tried} terms kept; LOO rmse ${kept.loo.rmse} (flat ${t.steps[0].loo.rmse}), newest-${t.split.test} test ${kept.test.rmse} (flat ${t.steps[0].test.rmse}); token odds ${radar.odds_test.kept.length}/4 terms kept, newest Brier ${radar.odds_test.shipped.test} (base ${radar.odds_test.steps[0].test})\n`);
+const kept = t.steps[t.steps.length - 1];
+process.stdout.write(`held out: ${t.kept}/${t.tried} terms kept, priors ^${t.w}; shipped train-LOO rmse ${kept.loo.rmse} (flat ${t.steps[0].loo.rmse}), newest-${t.split.test} test ${kept.test.rmse} (flat ${t.steps[0].test.rmse}); token odds ${radar.odds_test.kept.length}/4 terms kept, newest Brier ${radar.odds_test.shipped.test} (base ${radar.odds_test.steps[0].test})\n`);
 process.stdout.write(`token radar: wrote board.json, data.js, dashboard/ (${pages.length} files), screenshots/ (${shots.length}) and dossier.json to ${out}\n`);

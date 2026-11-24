@@ -1,7 +1,7 @@
 // Capture the three dossier screenshots from the built dashboard (run main.ts into out/ first).
 //   PLAYWRIGHT=<path to the playwright package> node tools/shoot.mjs [out]
-// Each shot is a JPEG whose quality is searched so the file lands in 300-350 KB, the band the
-// rules ask for (three images under the dossier cap, each well inside the gate's 512 KiB).
+// Each shot is a JPEG whose quality is searched so the file lands in 210-250 KB: four images in base64
+// plus the source text must stay under the dossier's 1.5 MiB.
 import { createRequire } from 'node:module';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -13,14 +13,15 @@ const out = resolve(process.argv[2] ?? 'out');
 const page0 = pathToFileURL(join(out, 'dashboard', 'index.html')).href;
 const dest = resolve('screenshots');
 
-// The detail view is captured tall (1280x1440: long side 1440, short side over 800) so the value
-// build-up and the whole farm plan show in one image.
+// The detail shot sorts by net so its selected row (the best net plan, farm or not) is the first, visible
+// with its Farm plan column; the filtered shot is another chain and a longer horizon; the last is the model.
 const SHOTS = [
-  ['1-board.jpg', '#/board', 1280, 1280], // the cover: KPIs, self-checks, both term-by-term tests, ledger, best farms, a plan, top rows
-  ['2-detail.jpg', '#/board?sel=__farm', 1280, 1440], // the best-ranked row whose costed plan says farm
-  ['3-filtered.jpg', '#/board?v=ok&dep=10000&sort=net&dir=desc&sel=__first', 1440, 900],
+  ['1-board.jpg', '#/board', 1280, 1280], // the cover: KPIs, self-checks, both term tests, ledger, best plans, one written out
+  ['2-detail.jpg', '#/board?sort=net&dir=desc&sel=__best', 1440, 1200],
+  ['3-filtered.jpg', '#/board?chain=Solana&hz=180&sort=expected_value_usd&dir=desc', 1440, 900],
+  ['4-model.jpg', '#/model', 1440, 1100],
 ];
-const LO = 300_000, HI = 350_000;
+const LO = 210_000, HI = 250_000;
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
@@ -31,10 +32,9 @@ for (const [name, hash, w, h] of SHOTS) {
   await page.setViewportSize({ width: w, height: h });
   await page.goto(page0 + hash.replace(/[?&]sel=__\w+/, ''));
   await page.waitForSelector('body[data-checked]'); // the in-browser recompute has finished
-  if (hash.includes('__first')) await page.click('tbody tr[data-slug]');
-  if (hash.includes('__farm')) await page.click(`tr[data-slug="${await page.evaluate(() => window.RADAR.rows.find((r) => r.plan.verdict === 'farm' && Math.abs(r.change_7d) >= 10).slug)}"]`);
+  if (hash.includes('__best')) await page.click('.tbl tbody tr[data-slug]'); // sorted by net, so the first row is the best plan
   await page.waitForTimeout(150);
-  await page.evaluate(() => scrollTo(0, 0)); // keep the header and integrity strip in frame
+  await page.evaluate(() => scrollTo(0, 0)); // keep the header and self-check strip in frame
   let lo = 40, hi = 100, best = null;
   while (lo <= hi) {
     const q = (lo + hi) >> 1;
