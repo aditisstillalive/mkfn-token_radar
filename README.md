@@ -8,7 +8,7 @@ A token launch radar. It ranks the DeFi protocols in a sealed DefiLlama snapshot
 
 **One engine, read by the judge.** The whole model lives in `dashboard/_engine.js`, named so it sorts first in the dossier. `main.ts` runs it to write `board.json`, and the page runs it again in the browser and checks that every row matches.
 
-**Value model (`fit-v7`).** `implied = core × (momentum × runway)^w × class`
+**Value model (`fit-v8`).** `implied = core × (momentum × runway)^w × class`
 
 The 92 comps (one per trading token) are sorted by when DefiLlama began tracking them, then split:
 - **Train:** the oldest 61. Within train, the oldest 40 are the fit set and the next 21 are the validation fold.
@@ -24,9 +24,12 @@ Every choice reads train only: the terms, their ridge penalties and the prior we
 | + category | 1.80 | 1.34 | 2.31 | not kept |
 | + 7d change | 1.83 | 1.34 | 2.30 | not kept |
 | + days tracked | 1.83 | 1.33 | 2.33 | kept |
+| + chain count, capped at 10 | 1.84 | 1.34 | 2.35 | not kept |
+| + on Ethereum | 1.83 | 1.34 | 2.34 | not kept |
 | × (momentum × runway)^1 | 1.83 | 1.32 | 2.45 | shipped |
 
 - **Core.** A term is kept only if it lowers both the leave-one-out miss and the validation miss. Size and days tracked survive. Days tracked passes leave-one-out by a hair, and the test does not agree with that choice.
+- **fit-v8 candidates.** Two more terms were tried after the original four, each capped so one sprawling deployment cannot lever the fit: chain count (capped at 10) and on Ethereum. Both raise the leave-one-out and validation misses, so neither is kept and the shipped model and every board row are unchanged from fit-v7.
 - **Growth and runway.** The brief asks the value to carry them, so they stay in. Their weight w is chosen from a strictly positive grid {0.25, 0.5, 0.75, 1} on the validation fold alone, which picked 1.
 - **What ships.** The last row is the shipped model. Its newest-token median miss is ×3.15, against ×4.64 for a flat multiple. Its ln-RMSE there is 2.45, worse than size alone at 2.30. The tables show this. Earlier versions reported this test split, so it isn't pristine, but no choice reads it.
 - **Value bands.** P10, P25, P75 and P90 are quantiles of the shipped model's leave-one-out misses. On the test, using the train fit's own quantiles, 58% of the newest caps fall inside P25–P75 (aim 50%) and 71% inside P10–P90 (aim 80%).
@@ -57,6 +60,10 @@ Each row has seven dated steps, each with its cost and time:
 
 The default deposit is $2,500. At 90 days **no plan clears its costs**, so the cover lists the closest to break-even and writes the closest one out. At 180 days three are marginal.
 
+**Portfolio.** One budget ($10,000 by default; $2,500 or $50,000 on the page) is split across plans. Reward, carry and risk scale with the deposit x, and gas and bridge do not, so each plan nets `edge × x − fixed`. The allocator fills the highest edge per dollar first. Each position is capped at 25% of the budget and 1% of the protocol's TVL, and joins only if it nets positive at its size; bleeding protocols are left out. Launches are treated as independent, which flatters diversification, and the page says so.
+- At 90 days no plan has a positive edge, so it holds cash. The cover says so and offers a 180-day button.
+- At 180 days it puts $2,500 into each of three plans: +$22.50 expected after $164 of costs, a 43% chance at least one launches, and −$164 if none does.
+
 **Assumptions the snapshot cannot test.** The Model & tests tab shows how many of the 198 verdicts flip when each assumption is halved or doubled: the parent factor 0.35, the launch float 0.3, the farmer share 7.5% and the 180-day season. Most flip none; the most any flips is 2.
 
 **Dashboard.** Four screenshots, each 210–250 KB:
@@ -66,12 +73,13 @@ The default deposit is $2,500. At 90 days **no plan clears its costs**, so the c
    - both term-by-term tables;
    - the 758-protocol ledger;
    - the best (or closest) plans;
-   - one plan written out.
+   - one plan written out;
+   - the portfolio for the default budget (hold cash at 90 days).
 2. **Detail.** The board sorted by net, with the first row's value build-up and plan.
 3. **Filtered view.** Solana at a 180-day horizon.
 4. **Model & tests.** The formula, both tables, a calibration scatter (held-out predicted against actual) and the Assumptions card.
 
-The board is sortable and filterable. Deposit, drop share and horizon re-run the engine in the page, and the filtered rows export as CSV. It runs with no network.
+The board is sortable and filterable. Deposit, drop share, horizon and budget re-run the engine in the page, and the filtered rows export as CSV. It runs with no network.
 
 ## Run it
 
