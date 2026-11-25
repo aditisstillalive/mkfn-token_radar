@@ -1,4 +1,4 @@
-:root{--bg:#0b1016;--panel:#111822;--p2:#16202c;--line:#223040;--l2:#2c3d51;--ink:#e6edf3;--ink-2:#a9b6c4;--ink-3:#6f8194;--sig:#3ddc97;--sig-dim:#1d6b4c;--amber:#f5b84b;--red:#f0706a;--blue:#6cb2ff;--violet:#b59cff;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+:root{--bg:#0b1016;--panel:#111822;--p2:#16202c;--line:#223040;--l2:#2c3d51;--ink:#e6edf3;--ink-2:#a9b6c4;--ink-3:#6f8194;--sig:#3ddc97;--sig-dim:#1d6b4c;--amber:#f5b84b;--red:#f0706a;--blue:#6cb2ff;--violet:#b59cff;--line-2:#2c3d51;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,"Segoe UI",system-ui,sans-serif}
 button,select,input{font:inherit;color:inherit}
@@ -41,6 +41,7 @@ h3{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3
 .chip{background:var(--panel);border:1px solid var(--l2);border-radius:999px;padding:4px 11px;cursor:pointer;color:var(--ink-2)}
 .chip[aria-pressed="true"]{border-color:var(--sig);color:var(--ink)}
 .chip i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.reset{background:none;border:0;color:var(--blue);cursor:pointer}
 .ctl{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-3)}
 .count{margin-left:auto;color:var(--ink-3);font-size:12px}
 .split{display:grid;grid-template-columns:minmax(0,1fr) 480px;gap:16px;align-items:start}
@@ -89,6 +90,7 @@ ol.steps li{padding:3px 0;border-bottom:1px dashed var(--line)}
 .c{color:var(--amber)}
 .t{color:var(--blue)}
 .formula{font:13px/1.7 var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 16px}
+.prose{color:var(--ink-2);max-width:1000px}
 .sc{width:100%;max-width:400px;font:10px var(--mono);fill:var(--ink-3)}
 .sc line{stroke:var(--line)}
 .sc .id{stroke:var(--ink-2)}
@@ -101,4 +103,3 @@ ol.steps li{padding:3px 0;border-bottom:1px dashed var(--line)}
 @media (max-width:800px){.cover,.kpis{grid-template-columns:1fr}}
 .split:not(.solo) .x2{display:none}
 .split:not(.solo) .fp em{display:none}
-.pf{margin-bottom:12px}.pf .mini{max-width:820px}
